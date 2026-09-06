@@ -46,14 +46,48 @@ EOD API. Исходные снимки данных будут сохранят�
 
 ```text
 .
-├── data.py                    # загрузка и проверка данных
 ├── data/
+│   ├── data.py                # загрузка и проверка данных
 │   ├── raw/                   # исходные снимки
 │   └── processed/             # подготовленные наборы
 ├── docs/
 │   └── research_protocol.md   # протокол эксперимента
 └── tests/
     └── test_data.py           # тесты конвейера данных
+```
+
+## Установка зависимостей
+
+Проект использует Python 3.11 и Poetry:
+
+```bash
+poetry install --with dev
+```
+
+## Проверки качества
+
+Локально выполняются те же проверки, что и в GitHub Actions:
+
+```bash
+poetry check --lock
+poetry run black --check .
+poetry run ruff check .
+poetry run mypy
+poetry run pytest
+```
+
+## Git-хуки
+
+Установить хуки после `poetry install`:
+
+```bash
+poetry run pre-commit install
+```
+
+Запустить все хуки вручную:
+
+```bash
+poetry run pre-commit run --all-files
 ```
 
 ## Статус
