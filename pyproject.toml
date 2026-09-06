@@ -43,6 +43,7 @@ files = ["data", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra --strict-config --strict-markers"
 
 [build-system]
