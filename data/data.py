@@ -79,10 +79,17 @@ def normalize_download(frame: pd.DataFrame, ticker: str) -> pd.DataFrame:
 
     normalized = frame.copy()
     if isinstance(normalized.columns, pd.MultiIndex):
-        if ticker in normalized.columns.get_level_values(-1):
-            normalized = cast(pd.DataFrame, normalized.xs(ticker, axis=1, level=-1))
-        else:
-            normalized.columns = normalized.columns.get_level_values(0)
+        ticker_levels = [
+            level
+            for level in range(normalized.columns.nlevels)
+            if ticker in normalized.columns.get_level_values(level)
+        ]
+        if not ticker_levels:
+            raise ValueError(f"Cannot identify {ticker} in yfinance columns")
+        normalized = cast(
+            pd.DataFrame,
+            normalized.xs(ticker, axis=1, level=ticker_levels[0]),
+        )
 
     normalized.columns = [
         str(column).strip().lower().replace(" ", "_") for column in normalized.columns
