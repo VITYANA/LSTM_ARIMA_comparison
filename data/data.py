@@ -13,17 +13,22 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import cast
 
+import numpy as np
 import pandas as pd
 import yfinance as yf  # type: ignore[import-untyped]
+
+TOLERANCE = 1e-8
 
 DEFAULT_TICKERS = ("SPY", "AAPL", "JPM", "XOM")
 DEFAULT_START = "2006-01-03"
 # yfinance treats `end` as exclusive, so this includes 31 December 2025.
 DEFAULT_END = "2026-01-01"
 DEFAULT_INTERVAL = "1d"
+DEFAULT_MIN_OBSERVATIONS = 100
 DEFAULT_OUTPUT_DIR = Path("data/raw")
 
 PRICE_COLUMNS = ("open", "high", "low", "close", "adj_close", "volume")
+POSITIVE_PRICE_COLUMNS = ("open", "high", "low", "close", "adj_close")
 ACTION_COLUMNS = ("dividends", "stock_splits")
 OUTPUT_COLUMNS = ("date", "ticker", *PRICE_COLUMNS, *ACTION_COLUMNS)
 
@@ -36,6 +41,7 @@ class DownloadConfig:
     start: str
     end: str
     interval: str = DEFAULT_INTERVAL
+    min_observations: int = DEFAULT_MIN_OBSERVATIONS
     source: str = "Yahoo Finance via yfinance"
 
 
@@ -100,6 +106,64 @@ def normalize_download(frame: pd.DataFrame, ticker: str) -> pd.DataFrame:
     return normalized.loc[:, OUTPUT_COLUMNS].sort_values("date").reset_index(drop=True)
 
 
+def validate_ticker_frame(
+    frame: pd.DataFrame,
+    ticker: str,
+    min_observations: int = DEFAULT_MIN_OBSERVATIONS,
+) -> None:
+    """Reject data defects that would make the snapshot unsuitable for analysis."""
+    if min_observations < 1:
+        raise ValueError("min_observations must be positive")
+
+    missing_columns = set(OUTPUT_COLUMNS) - set(frame.columns)
+    if missing_columns:
+        raise ValueError(f"{ticker}: missing columns: {sorted(missing_columns)}")
+
+    if len(frame) < min_observations:
+        raise ValueError(
+            f"{ticker}: only {len(frame)} observations; at least {min_observations} required"
+        )
+
+    if frame["date"].isna().any():
+        raise ValueError(f"{ticker}: missing dates found")
+    if not frame["date"].is_monotonic_increasing:
+        raise ValueError(f"{ticker}: dates are not sorted")
+    if frame["date"].duplicated().any():
+        raise ValueError(f"{ticker}: duplicate dates found")
+
+    if frame["ticker"].isna().any() or not frame["ticker"].eq(ticker).all():
+        raise ValueError(f"{ticker}: ticker column contains unexpected values")
+
+    numeric_columns = (*PRICE_COLUMNS, *ACTION_COLUMNS)
+    numeric = frame.loc[:, numeric_columns]
+    if numeric.isna().any().any():
+        columns_with_missing = numeric.columns[numeric.isna().any()].tolist()
+        raise ValueError(f"{ticker}: missing values in {columns_with_missing}")
+
+    try:
+        numeric_values = numeric.to_numpy(dtype=float)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{ticker}: non-numeric market values found") from error
+    if not np.isfinite(numeric_values).all():
+        raise ValueError(f"{ticker}: non-finite market values found")
+
+    if frame.loc[:, POSITIVE_PRICE_COLUMNS].le(0).any().any():
+        raise ValueError(f"{ticker}: non-positive prices found")
+    if frame["volume"].lt(0).any():
+        raise ValueError(f"{ticker}: negative volume found")
+
+    highest_other_ohlc = frame.loc[:, ["open", "low", "close"]].max(axis=1)
+    if frame["high"].add(TOLERANCE).lt(highest_other_ohlc).any():
+        raise ValueError(f"{ticker}: high is below another OHLC value")
+
+    lowest_other_ohlc = frame.loc[:, ["open", "high", "close"]].min(axis=1)
+    if frame["low"].sub(TOLERANCE).gt(lowest_other_ohlc).any():
+        raise ValueError(f"{ticker}: low is above another OHLC value")
+
+    if frame.loc[:, ACTION_COLUMNS].lt(0).any().any():
+        raise ValueError(f"{ticker}: negative dividend or split value found")
+
+
 def download_ticker(ticker: str, config: DownloadConfig) -> pd.DataFrame:
     """Download one ticker, including dividends and stock splits."""
     frame = yf.download(
@@ -114,7 +178,9 @@ def download_ticker(ticker: str, config: DownloadConfig) -> pd.DataFrame:
         threads=False,
         multi_level_index=False,
     )
-    return normalize_download(frame, ticker)
+    normalized = normalize_download(frame, ticker)
+    validate_ticker_frame(normalized, ticker, config.min_observations)
+    return normalized
 
 
 def write_csv(frame: pd.DataFrame, path: Path) -> None:
@@ -177,6 +243,7 @@ def build_snapshot(config: DownloadConfig, output_dir: Path, force: bool = False
         "notes": [
             "The end date is exclusive.",
             "auto_adjust=False; adjusted and unadjusted prices are both retained.",
+            "Every ticker passed the configured data-quality checks before writing.",
             "Downloaded market data are not covered by the repository license.",
         ],
     }
@@ -195,6 +262,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--start", default=DEFAULT_START)
     parser.add_argument("--end", default=DEFAULT_END, help="Exclusive end date")
     parser.add_argument("--interval", default=DEFAULT_INTERVAL)
+    parser.add_argument("--min-observations", type=int, default=DEFAULT_MIN_OBSERVATIONS)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--force", action="store_true", help="Replace an existing snapshot")
     return parser.parse_args(argv)
@@ -206,12 +274,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     tickers = tuple(dict.fromkeys(normalize_ticker(ticker) for ticker in args.tickers))
     if pd.Timestamp(args.start) >= pd.Timestamp(args.end):
         raise ValueError("--start must be earlier than --end")
+    if args.min_observations < 1:
+        raise ValueError("--min-observations must be positive")
 
     config = DownloadConfig(
         tickers=tickers,
         start=args.start,
         end=args.end,
         interval=args.interval,
+        min_observations=args.min_observations,
     )
     manifest_path = build_snapshot(config, args.output_dir, force=args.force)
     print(f"Snapshot created: {manifest_path}")
