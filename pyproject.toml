@@ -23,6 +23,7 @@ mypy = ">=1.14,<2"
 pandas-stubs = ">=2.2,<3"
 pre-commit = ">=4,<5"
 pytest = ">=8,<10"
+pytest-cov = ">=6,<8"
 ruff = ">=0.9,<1"
 
 [tool.black]
@@ -44,7 +45,7 @@ files = ["data", "tests"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-ra --strict-config --strict-markers"
+addopts = "-ra --strict-config --strict-markers --cov=data.data --cov-branch --cov-report=term-missing --cov-fail-under=90"
 
 [build-system]
 requires = ["poetry-core>=2.0,<3"]
