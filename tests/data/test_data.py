@@ -1,3 +1,5 @@
+"""Tests for downloading and validating market-data snapshots."""
+
 from __future__ import annotations
 
 import hashlib
