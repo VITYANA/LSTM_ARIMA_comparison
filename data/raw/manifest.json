@@ -1,0 +1,59 @@
+{
+  "created_at_utc": "2026-09-11T05:36:16.316404+00:00",
+  "config": {
+    "tickers": [
+      "SPY",
+      "AAPL",
+      "JPM",
+      "XOM"
+    ],
+    "start": "2006-01-03",
+    "end": "2026-01-01",
+    "interval": "1d",
+    "min_observations": 100,
+    "source": "Yahoo Finance via yfinance"
+  },
+  "software": {
+    "python": "3.11.9",
+    "pandas": "2.3.3",
+    "yfinance": "0.2.66"
+  },
+  "files": {
+    "SPY.csv": {
+      "path": "data/raw/SPY.csv",
+      "rows": 5031,
+      "bytes": 438637,
+      "sha256": "aac697459615fbc6c3f55e3abbb73455a1520d417ebf101aef336e768e844c12"
+    },
+    "AAPL.csv": {
+      "path": "data/raw/AAPL.csv",
+      "rows": 5031,
+      "bytes": 444482,
+      "sha256": "bedd4ee7cb61e1d15c54b23ce3e64492a52bbe3c0be6e7a318ed3a28c9a6ba17"
+    },
+    "JPM.csv": {
+      "path": "data/raw/JPM.csv",
+      "rows": 5031,
+      "bytes": 432322,
+      "sha256": "d5a90d3f46478044210d175c12a6e9871be92b7fd1faa1aa34e62179feeed59c"
+    },
+    "XOM.csv": {
+      "path": "data/raw/XOM.csv",
+      "rows": 5031,
+      "bytes": 432871,
+      "sha256": "9fe6758e455f3f4adc16485d3da3ebd3cc7c25412c8652902131c4fd40f5651a"
+    },
+    "prices.csv": {
+      "path": "data/raw/prices.csv",
+      "rows": 20124,
+      "bytes": 1748096,
+      "sha256": "b97607ab7c27bfdb74868a114c96c48970d6c6611eb0ac2ff56e6393ce297d63"
+    }
+  },
+  "notes": [
+    "The end date is exclusive.",
+    "auto_adjust=False; adjusted and unadjusted prices are both retained.",
+    "Every ticker passed the configured data-quality checks before writing.",
+    "Downloaded market data are not covered by the repository license."
+  ]
+}

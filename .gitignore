@@ -22,9 +22,9 @@ htmlcov/
 # Downloaded data and generated artifacts
 data/raw/*
 !data/raw/.gitkeep
+!data/raw/manifest.json
 data/processed/*
 !data/processed/.gitkeep
 artifacts/
 models/
 outputs/
-
