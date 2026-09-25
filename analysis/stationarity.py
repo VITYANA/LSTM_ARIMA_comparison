@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from typing import Literal
 
 import numpy as np
 import pandas as pd
+from statsmodels.stats.diagnostic import (  # type: ignore[import-untyped]
+    acorr_ljungbox,
+)
 from statsmodels.tsa.stattools import (  # type: ignore[import-untyped]
     acf,
     adfuller,
@@ -47,16 +51,70 @@ def _clean_series(series: pd.Series) -> pd.Series:
     return clean
 
 
-def acf_pacf_table(series: pd.Series, nlags: int = 20) -> pd.DataFrame:
-    """Calculate ACF and PACF values for identical lag positions."""
+def acf_pacf_table(
+    series: pd.Series,
+    nlags: int = 20,
+    alpha: float = 0.05,
+) -> pd.DataFrame:
+    """Calculate ACF, PACF and zero-centred confidence intervals."""
     clean = _clean_series(series)
     if nlags < 1 or nlags >= len(clean) // 2:
         raise ValueError("nlags must be positive and less than half the sample size")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be between zero and one")
+
+    acf_values, acf_confidence = acf(
+        clean,
+        nlags=nlags,
+        fft=True,
+        alpha=alpha,
+        result_object=False,
+    )
+    pacf_values, pacf_confidence = pacf(
+        clean,
+        nlags=nlags,
+        method="ywm",
+        alpha=alpha,
+    )
+    acf_bounds = np.asarray(acf_confidence) - np.asarray(acf_values)[:, None]
+    pacf_bounds = np.asarray(pacf_confidence) - np.asarray(pacf_values)[:, None]
+
     return pd.DataFrame(
         {
             "lag": range(nlags + 1),
-            "acf": acf(clean, nlags=nlags, fft=True),
-            "pacf": pacf(clean, nlags=nlags, method="ywm"),
+            "acf": acf_values,
+            "acf_ci_lower": acf_bounds[:, 0],
+            "acf_ci_upper": acf_bounds[:, 1],
+            "pacf": pacf_values,
+            "pacf_ci_lower": pacf_bounds[:, 0],
+            "pacf_ci_upper": pacf_bounds[:, 1],
+        }
+    )
+
+
+def ljung_box_table(
+    series: pd.Series,
+    lags: Sequence[int] = (5, 10, 20),
+) -> pd.DataFrame:
+    """Run Ljung-Box tests for selected autocorrelation horizons."""
+    clean = _clean_series(series)
+    validated_lags = tuple(lags)
+    if not validated_lags:
+        raise ValueError("lags must not be empty")
+    if any(lag < 1 for lag in validated_lags):
+        raise ValueError("lags must contain only positive integers")
+    if tuple(sorted(set(validated_lags))) != validated_lags:
+        raise ValueError("lags must be unique and strictly increasing")
+    if validated_lags[-1] >= len(clean):
+        raise ValueError("lags must be less than the sample size")
+
+    result = acorr_ljungbox(clean, lags=list(validated_lags), return_df=True)
+    return pd.DataFrame(
+        {
+            "lag": validated_lags,
+            "statistic": result["lb_stat"].to_numpy(dtype=float),
+            "p_value": result["lb_pvalue"].to_numpy(dtype=float),
+            "reject_no_autocorrelation_at_5pct": result["lb_pvalue"].lt(0.05).to_numpy(dtype=bool),
         }
     )
 

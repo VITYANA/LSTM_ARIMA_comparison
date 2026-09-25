@@ -14,6 +14,7 @@ from analysis.stationarity import (
     StationarityResult,
     acf_pacf_table,
     build_stationarity_report,
+    ljung_box_table,
     run_adf,
     run_kpss,
 )
@@ -36,14 +37,29 @@ def random_walk_series(size: int = 400) -> pd.Series:
 
 
 def test_acf_pacf_table_returns_aligned_requested_lags() -> None:
-    """Return aligned ACF and PACF coefficients"""
+    """Return aligned coefficients and confidence intervals"""
     result = acf_pacf_table(stationary_series(), nlags=10)
 
-    assert result.columns.tolist() == ["lag", "acf", "pacf"]
+    assert result.columns.tolist() == [
+        "lag",
+        "acf",
+        "acf_ci_lower",
+        "acf_ci_upper",
+        "pacf",
+        "pacf_ci_lower",
+        "pacf_ci_upper",
+    ]
     assert result["lag"].tolist() == list(range(11))
     assert result.loc[0, "acf"] == pytest.approx(1.0)
     assert result.loc[0, "pacf"] == pytest.approx(1.0)
     assert result.loc[1, "acf"] == pytest.approx(result.loc[1, "pacf"])
+    assert (result["acf_ci_lower"] <= 0).all()
+    assert (result["acf_ci_upper"] >= 0).all()
+    assert (result["pacf_ci_lower"] <= 0).all()
+    assert (result["pacf_ci_upper"] >= 0).all()
+    lower = result["acf_ci_lower"].to_numpy(dtype=float)[1]
+    upper = result["acf_ci_upper"].to_numpy(dtype=float)[1]
+    assert lower < 0 < upper
 
 
 @pytest.mark.parametrize(
@@ -69,12 +85,62 @@ def test_acf_pacf_table_rejects_invalid_lags(nlags: int) -> None:
         acf_pacf_table(stationary_series(100), nlags=nlags)
 
 
+@pytest.mark.parametrize("alpha", [0.0, 1.0, -0.1, 1.1])
+def test_acf_pacf_table_rejects_invalid_alpha(alpha: float) -> None:
+    """Reject confidence levels outside open unit interval"""
+    with pytest.raises(ValueError, match="alpha"):
+        acf_pacf_table(stationary_series(), alpha=alpha)
+
+
 def test_acf_pacf_table_does_not_mutate_source() -> None:
     """Preserve source values and index ordering"""
     series = stationary_series()
     original = series.copy(deep=True)
 
     acf_pacf_table(series, nlags=10)
+
+    pd.testing.assert_series_equal(series, original)
+
+
+def test_ljung_box_table_detects_serial_correlation() -> None:
+    """Detect serial correlation at requested lag horizons"""
+    result = ljung_box_table(stationary_series(), lags=(5, 10, 20))
+
+    assert result.columns.tolist() == [
+        "lag",
+        "statistic",
+        "p_value",
+        "reject_no_autocorrelation_at_5pct",
+    ]
+    assert result["lag"].tolist() == [5, 10, 20]
+    assert (result["statistic"] > 0).all()
+    assert (result["p_value"] < 0.05).all()
+    assert result["reject_no_autocorrelation_at_5pct"].tolist() == [True] * 3
+
+
+@pytest.mark.parametrize(
+    "lags",
+    [(), (0, 5), (-1, 5), (5, 5), (10, 5), (5, 100)],
+    ids=["empty", "zero", "negative", "duplicate", "unsorted", "excessive"],
+)
+def test_ljung_box_table_rejects_invalid_lags(lags: tuple[int, ...]) -> None:
+    """Reject empty unordered or unavailable lag horizons"""
+    with pytest.raises(ValueError, match="lags"):
+        ljung_box_table(stationary_series(100), lags=lags)
+
+
+def test_ljung_box_table_rejects_invalid_series() -> None:
+    """Reject unsuitable series before Ljung Box test"""
+    with pytest.raises(ValueError):
+        ljung_box_table(pd.Series([1.0] * 40))
+
+
+def test_ljung_box_table_does_not_mutate_source() -> None:
+    """Preserve source series during Ljung Box test"""
+    series = stationary_series()
+    original = series.copy(deep=True)
+
+    ljung_box_table(series)
 
     pd.testing.assert_series_equal(series, original)
 
