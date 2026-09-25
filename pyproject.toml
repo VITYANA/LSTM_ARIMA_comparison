@@ -12,6 +12,8 @@ dependencies = [
     "statsmodels>=0.14,<1",
     "tensorflow>=2.16,<3",
     "yfinance>=0.2.54,<1",
+    "matplotlib (>=3.11.1,<4.0.0)",
+    "seaborn (>=0.13.2,<0.14.0)",
 ]
 
 [tool.poetry]
@@ -25,6 +27,8 @@ pre-commit = ">=4,<5"
 pytest = ">=8,<10"
 pytest-cov = ">=6,<8"
 ruff = ">=0.9,<1"
+jupyterlab = "^4.6.3"
+ipykernel = "^7.3.0"
 
 [tool.black]
 line-length = 100
@@ -40,12 +44,12 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["data", "tests"]
+files = ["analysis", "data", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-ra --strict-config --strict-markers --cov=data.data --cov-branch --cov-report=term-missing --cov-fail-under=90"
+addopts = "-ra --strict-config --strict-markers --cov=analysis --cov=data --cov-branch --cov-report=term-missing --cov-fail-under=100"
 
 [build-system]
 requires = ["poetry-core>=2.0,<3"]
