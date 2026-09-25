@@ -26,6 +26,7 @@ data/raw/*
 !data/raw/manifest.json
 data/processed/*
 !data/processed/.gitkeep
+!data/processed/next_trading_day_returns.manifest.json
 artifacts/
 models/
 outputs/
