@@ -168,15 +168,16 @@ def test_build_predictions_accepts_structural_custom_model(
     assert result["predicted_return"].eq(0.25).all()
 
 
-def test_build_predictions_hides_final_test_from_model(
+def test_build_predictions_hides_target_and_final_test_from_model(
     model_dataset: pd.DataFrame,
 ) -> None:
-    """Pass only train and validation observations"""
+    """Hide targets and final test from model input"""
     model = SpyModel()
 
     build_predictions(model_dataset, model)
 
     assert model.received is not None
+    assert "target_return" not in model.received.columns
     assert set(model.received["split"]) == {"train", "validation"}
     assert model.received["target_date"].max() == pd.Timestamp("2016-01-06")
 
