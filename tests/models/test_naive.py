@@ -5,7 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from models.naive import predict_zero
+from models.interfaces import ForecastModel
+from models.naive import NaiveModel
 
 
 @pytest.mark.parametrize(
@@ -15,7 +16,7 @@ from models.naive import predict_zero
         pd.Index([7, 2, 11], name="observation"),
     ],
 )
-def test_predict_zero_preserves_index_and_returns_float_zeros(
+def test_naive_model_preserves_index_and_returns_float_zeros(
     index: pd.Index,
 ) -> None:
     """Preserve arbitrary indexes and return float zeros"""
@@ -25,7 +26,7 @@ def test_predict_zero_preserves_index_and_returns_float_zeros(
     )
     original = observations.copy(deep=True)
 
-    result = predict_zero(observations)
+    result = NaiveModel().predict(observations)
 
     pd.testing.assert_frame_equal(observations, original)
     assert result.index.equals(index)
@@ -34,13 +35,20 @@ def test_predict_zero_preserves_index_and_returns_float_zeros(
     assert result.tolist() == [0.0, 0.0, 0.0]
 
 
-def test_predict_zero_accepts_empty_frame() -> None:
+def test_naive_model_accepts_empty_frame() -> None:
     """Return a typed empty prediction series"""
     observations = pd.DataFrame(index=pd.Index([], name="observation"))
 
-    result = predict_zero(observations)
+    result = NaiveModel().predict(observations)
 
     assert result.empty
     assert result.index.equals(observations.index)
     assert result.name == "predicted_return"
     assert result.dtype == "float64"
+
+
+def test_naive_model_exposes_stable_name() -> None:
+    """Expose baseline name through forecast protocol"""
+    model: ForecastModel = NaiveModel()
+
+    assert model.name == "naive_zero"
