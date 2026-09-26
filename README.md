@@ -61,8 +61,11 @@ EOD API. Исходные снимки данных будут сохранят�
 │   ├── contracts.py           # общий контракт таблицы прогнозов
 │   ├── loading.py             # проверяемая загрузка модельного набора
 │   ├── metrics.py             # относительные и pooled-метрики
-│   └── pipeline.py            # стандартизация прогнозов моделей
+│   ├── pipeline.py            # стандартизация прогнозов моделей
+│   ├── selection.py           # выбор порядка ARIMA на validation
+│   └── walk_forward.py        # ежедневный expanding-window backtest
 ├── models/
+│   ├── arima.py               # поиск, обучение и BIC shortlist ARIMA
 │   ├── interfaces.py          # структурный интерфейс ForecastModel
 │   └── naive.py               # нулевой прогноз доходности
 ├── notebooks/
@@ -71,13 +74,17 @@ EOD API. Исходные снимки данных будут сохранят�
 │   ├── 03_stationarity_analysis.ipynb
 │   └── 04_evaluation_baseline.ipynb
 ├── docs/
+│   ├── arima_protocol.md      # train shortlist и validation selection
 │   ├── evaluation_protocol.md # критерии этапа оценки
 │   └── research_protocol.md   # протокол эксперимента
 └── tests/
     ├── analysis/
     ├── data/
     ├── evaluation/
-    └── models/                # структура тестов повторяет рабочие модули
+    │   ├── test_selection.py
+    │   └── test_walk_forward.py
+    └── models/
+        └── test_arima.py      # структура тестов повторяет рабочие модули
 ```
 
 ## Установка зависимостей
@@ -156,8 +163,10 @@ poetry run pre-commit run --all-files
 ## Статус
 
 Подготовлены воспроизводимый конвейер данных, модельный набор, EDA, диагностика
-стационарности, evaluation pipeline и выполненный наивный baseline. Обучение и
-сравнение ARIMA, LSTM и ARIMA-LSTM выполняется на следующих этапах.
+стационарности, evaluation pipeline, наивный baseline и код двухступенчатого
+выбора ARIMA. Выполнение ARIMA validation notebook и интерпретация его
+результатов ещё не завершены; final test остаётся закрытым. LSTM и ARIMA-LSTM
+выполняются на следующих этапах.
 
 ## Лицензия
 
