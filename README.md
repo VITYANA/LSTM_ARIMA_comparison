@@ -57,17 +57,27 @@ EOD API. Исходные снимки данных будут сохранят�
 │   ├── prepare.py             # обработанный снимок и его манифест
 │   ├── raw/                   # локальные исходные снимки
 │   └── processed/             # локальный модельный набор и манифест
+├── evaluation/
+│   ├── contracts.py           # общий контракт таблицы прогнозов
+│   ├── loading.py             # проверяемая загрузка модельного набора
+│   ├── metrics.py             # относительные и pooled-метрики
+│   └── pipeline.py            # стандартизация прогнозов моделей
+├── models/
+│   ├── interfaces.py          # структурный интерфейс ForecastModel
+│   └── naive.py               # нулевой прогноз доходности
 ├── notebooks/
 │   ├── 01_data_quality.ipynb
 │   ├── 02_exploratory_analysis.ipynb
-│   └── 03_stationarity_analysis.ipynb
+│   ├── 03_stationarity_analysis.ipynb
+│   └── 04_evaluation_baseline.ipynb
 ├── docs/
+│   ├── evaluation_protocol.md # критерии этапа оценки
 │   └── research_protocol.md   # протокол эксперимента
 └── tests/
     ├── analysis/
-    │   └── test_*.py          # тесты модулей analysis
-    └── data/
-        └── test_*.py          # тесты конвейера данных
+    ├── data/
+    ├── evaluation/
+    └── models/                # структура тестов повторяет рабочие модули
 ```
 
 ## Установка зависимостей
@@ -101,6 +111,21 @@ poetry run jupyter lab
 диагностику стационарности. Они читают снимок через манифест и не изменяют
 сырые данные.
 
+## Воспроизведение наивного baseline
+
+Перед запуском должен существовать обработанный снимок
+`data/processed/next_trading_day_returns.csv` и соответствующий манифест. Если
+снимок отсутствует, создайте его командой `poetry run python -m data.prepare`.
+
+Выполнить notebook и сохранить результаты:
+
+```bash
+poetry run jupyter execute notebooks/04_evaluation_baseline.ipynb --inplace
+```
+
+Notebook рассчитывает baseline отдельно для train и validation. Final test не
+передаётся модели и не отображается в результатах.
+
 ## Проверки качества
 
 Локально выполняются те же проверки, что и в GitHub Actions:
@@ -111,6 +136,7 @@ poetry run black --check .
 poetry run ruff check .
 poetry run mypy
 poetry run pytest
+poetry run pre-commit run --all-files
 ```
 
 ## Git-хуки
@@ -129,8 +155,9 @@ poetry run pre-commit run --all-files
 
 ## Статус
 
-Подготовлены воспроизводимый конвейер данных, модельный набор, EDA и диагностика
-стационарности. Обучение ARIMA, LSTM и ARIMA-LSTM выполняется на следующем этапе.
+Подготовлены воспроизводимый конвейер данных, модельный набор, EDA, диагностика
+стационарности, evaluation pipeline и выполненный наивный baseline. Обучение и
+сравнение ARIMA, LSTM и ARIMA-LSTM выполняется на следующих этапах.
 
 ## Лицензия
 

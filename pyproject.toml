@@ -44,12 +44,13 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["analysis", "data", "tests"]
+explicit_package_bases = true
+files = ["analysis", "data", "evaluation", "models", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-ra --strict-config --strict-markers --cov=analysis --cov=data --cov-branch --cov-report=term-missing --cov-fail-under=100"
+addopts = "-ra --strict-config --strict-markers --cov=analysis --cov=data --cov=evaluation --cov=models --cov-branch --cov-report=term-missing --cov-fail-under=100"
 
 [build-system]
 requires = ["poetry-core>=2.0,<3"]

@@ -28,5 +28,4 @@ data/processed/*
 !data/processed/.gitkeep
 !data/processed/next_trading_day_returns.manifest.json
 artifacts/
-models/
 outputs/
