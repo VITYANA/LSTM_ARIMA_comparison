@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from evaluation.contracts import (
+    BPS_FACTOR,
     EVALUATION_SPLITS,
     PREDICTION_COLUMNS,
     require_finite_numeric,
@@ -24,7 +25,6 @@ METRIC_COLUMNS = (
 )
 ALIGNMENT_COLUMNS = ("split", "ticker", "target_date")
 UNIQUE_KEY_COLUMNS = (*ALIGNMENT_COLUMNS, "model")
-BASIS_POINTS = 10_000.0
 
 
 def _validate_predictions(predictions: pd.DataFrame, baseline_model: str) -> None:
@@ -97,8 +97,8 @@ def _metric_row(
         "ticker": ticker,
         "model": model,
         "observations": len(observations),
-        "mae_bps": mae * BASIS_POINTS,
-        "rmse_bps": float(np.sqrt(mse)) * BASIS_POINTS,
+        "mae_bps": mae * BPS_FACTOR,
+        "rmse_bps": float(np.sqrt(mse)) * BPS_FACTOR,
         "rel_mae": mae / baseline_mae,
         "oos_r2": 1.0 - mse / baseline_mse,
         "directional_accuracy": float(np.mean(np.sign(predicted) == np.sign(actual))),

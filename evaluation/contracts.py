@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+BPS_FACTOR = 10_000.0
 EVALUATION_SPLITS = frozenset({"train", "validation"})
 PREDICTION_COLUMNS = (
     "date",
