@@ -2,33 +2,19 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
+from evaluation.contracts import (
+    EVALUATION_SPLITS,
+    PREDICTION_COLUMNS,
+    require_finite_numeric,
+)
 from evaluation.loading import REQUIRED_DATASET_COLUMNS
 from models.interfaces import ForecastModel
 
 ALLOWED_SPLITS = frozenset({"train", "validation", "test"})
-EVALUATION_SPLITS = frozenset({"train", "validation"})
-PREDICTION_COLUMNS = (
-    "date",
-    "target_date",
-    "ticker",
-    "split",
-    "model",
-    "actual_return",
-    "predicted_return",
-)
 PREDICTION_NAME = "predicted_return"
 OBSERVATION_KEY = ("ticker", "target_date", "split")
-
-
-def _validate_finite_numeric(series: pd.Series, label: str) -> None:
-    """Require a numeric series containing only finite values."""
-    if series.dtype.kind not in "iufc":
-        raise ValueError(f"{label} must be numeric")
-    if not np.isfinite(series.to_numpy()).all():
-        raise ValueError(f"{label} must contain only finite values")
 
 
 def _validate_dataset(dataset: pd.DataFrame) -> None:
@@ -42,7 +28,7 @@ def _validate_dataset(dataset: pd.DataFrame) -> None:
         raise ValueError("dataset contains unknown split values")
     if dataset.duplicated(list(OBSERVATION_KEY)).any():
         raise ValueError("dataset contains duplicate observation keys")
-    _validate_finite_numeric(dataset["target_return"], "target_return")
+    require_finite_numeric(dataset["target_return"], "target_return")
 
 
 def _validate_predictions(predictions: object, observations: pd.DataFrame) -> pd.Series:
@@ -55,7 +41,7 @@ def _validate_predictions(predictions: object, observations: pd.DataFrame) -> pd
         raise ValueError("prediction length must match observations")
     if not predictions.index.equals(observations.index):
         raise ValueError("prediction index must match observations")
-    _validate_finite_numeric(predictions, "predictions")
+    require_finite_numeric(predictions, "predictions")
     return predictions
 
 
