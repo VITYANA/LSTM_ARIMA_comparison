@@ -13,7 +13,7 @@ from evaluation.contracts import (
     validate_model_dataset,
     validate_prediction_series,
 )
-from models.interfaces import ForecastModel
+from models.interfaces import ForecastModel, validate_model_name
 
 
 def build_predictions(dataset: pd.DataFrame, model: ForecastModel) -> pd.DataFrame:
@@ -25,9 +25,7 @@ def build_predictions(dataset: pd.DataFrame, model: ForecastModel) -> pd.DataFra
         raise ValueError("dataset must contain train or validation rows")
     observations = observations.sort_values(["split", "ticker", "target_date"])
 
-    model_name = model.name
-    if not isinstance(model_name, str) or not model_name.strip():
-        raise ValueError("model name must be a non-empty string")
+    model_name = validate_model_name(model.name)
 
     model_input = build_model_input(observations)
     predictions = validate_prediction_series(model.predict(model_input), model_input)

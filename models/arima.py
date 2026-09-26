@@ -10,6 +10,7 @@ import pandas as pd
 from statsmodels.tsa.arima.model import ARIMA as StatsmodelsARIMA  # type: ignore[import-untyped]
 
 from evaluation.contracts import validate_model_dataset
+from models.interfaces import validate_model_name
 
 ARIMAOrder = tuple[int, int, int]
 PREDICTION_NAME = "predicted_return"
@@ -59,13 +60,6 @@ class _ARIMACandidateResult(Protocol):
         ...
 
 
-def _validate_model_name(name: object) -> str:
-    """Return a non-empty model identifier."""
-    if not isinstance(name, str) or not name.strip():
-        raise ValueError("model name must be a non-empty string")
-    return name
-
-
 def _validate_order(order: object) -> ARIMAOrder:
     """Return a valid nonnegative ARIMA order."""
     if not isinstance(order, tuple) or len(order) != 3:
@@ -103,7 +97,7 @@ class ARIMAModel:
 
     def __init__(self, fitted_result: _ARIMAResult, *, name: str = "arima") -> None:
         self._fitted_result = fitted_result
-        self._name = _validate_model_name(name)
+        self._name = validate_model_name(name)
 
     @classmethod
     def fit(
@@ -115,7 +109,7 @@ class ARIMAModel:
     ) -> Self:
         """Fit and return one stationary ARIMA model."""
         validated_order = _validate_order(order)
-        validated_name = _validate_model_name(name)
+        validated_name = validate_model_name(name)
         values = _return_values(history)
 
         try:
@@ -172,7 +166,7 @@ class ARIMAFitter:
         model_name: str = "arima",
     ) -> None:
         self._orders = {ticker: _validate_order(order) for ticker, order in orders.items()}
-        self._model_name = _validate_model_name(model_name)
+        self._model_name = validate_model_name(model_name)
 
     def __call__(self, ticker: str, history: pd.DataFrame) -> ARIMAModel:
         """Fit the configured order for one ticker."""

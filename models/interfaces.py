@@ -7,6 +7,13 @@ from typing import Protocol
 import pandas as pd
 
 
+def validate_model_name(name: object) -> str:
+    """Return a non-empty model identifier."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("model name must be a non-empty string")
+    return name
+
+
 class ForecastModel(Protocol):
     """Model capable of producing aligned return forecasts."""
 
