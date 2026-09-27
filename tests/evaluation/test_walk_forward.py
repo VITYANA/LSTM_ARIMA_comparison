@@ -54,6 +54,24 @@ def model_dataset() -> pd.DataFrame:
     return frame
 
 
+@pytest.fixture
+def history_boundary_dataset() -> pd.DataFrame:
+    """Return 253 train targets with consecutive business dates"""
+    dates = pd.bdate_range("2010-01-04", periods=254)
+    frame = pd.DataFrame(
+        {
+            "date": dates[:-1],
+            "target_date": dates[1:],
+            "ticker": "AAA",
+            "adj_close": np.arange(100.0, 353.0),
+            "log_return": np.arange(253, dtype="float64") / 10_000.0,
+            "target_return": np.arange(1, 254, dtype="float64") / 10_000.0,
+            "split": "train",
+        }
+    )
+    return frame.loc[:, DATASET_COLUMNS]
+
+
 class RecordingModel:
     """Record one observation passed to a fitted model."""
 
@@ -161,6 +179,168 @@ def test_build_walk_forward_predictions_reports_completed_observations(
     )
 
     assert progress == [(1, 4), (2, 4), (3, 4), (4, 4)]
+
+
+def test_walk_forward_defaults_to_existing_validation_behavior(
+    model_dataset: pd.DataFrame,
+) -> None:
+    """Keep default scheduling equivalent to explicit validation"""
+    default = build_walk_forward_predictions(model_dataset, RecordingFitter())
+    explicit = build_walk_forward_predictions(
+        model_dataset,
+        RecordingFitter(),
+        target_splits=("validation",),
+    )
+
+    pd.testing.assert_frame_equal(default, explicit)
+
+
+def test_walk_forward_supports_train_and_validation_targets(
+    model_dataset: pd.DataFrame,
+) -> None:
+    """Forecast requested evaluation splits without test leakage"""
+    original = model_dataset.copy(deep=True)
+    fitter = RecordingFitter()
+
+    result = build_walk_forward_predictions(
+        model_dataset,
+        fitter,
+        target_splits=("train", "validation"),
+    )
+
+    pd.testing.assert_frame_equal(model_dataset, original)
+    assert result[["ticker", "split", "target_date"]].values.tolist() == [
+        ["AAA", "train", pd.Timestamp("2010-01-05")],
+        ["AAA", "validation", pd.Timestamp("2016-01-05")],
+        ["AAA", "validation", pd.Timestamp("2016-01-06")],
+        ["BBB", "train", pd.Timestamp("2010-01-05")],
+        ["BBB", "validation", pd.Timestamp("2016-01-05")],
+        ["BBB", "validation", pd.Timestamp("2016-01-06")],
+    ]
+    assert "test" not in result["split"].values
+    assert all("test" not in history["split"].values for _, history in fitter.calls)
+
+
+def test_walk_forward_handles_duplicate_dataframe_indexes(
+    model_dataset: pd.DataFrame,
+) -> None:
+    """Schedule each observation once despite repeated index labels"""
+    repeated_index = model_dataset.copy()
+    repeated_index.index = [0, 1, 2, 0, 3, 0, 0, 4]
+
+    result = build_walk_forward_predictions(repeated_index, RecordingFitter())
+
+    assert result[["ticker", "target_date"]].values.tolist() == [
+        ["AAA", pd.Timestamp("2016-01-05")],
+        ["AAA", pd.Timestamp("2016-01-06")],
+        ["BBB", pd.Timestamp("2016-01-05")],
+        ["BBB", pd.Timestamp("2016-01-06")],
+    ]
+
+
+def test_walk_forward_uses_exact_minimum_history_boundary(
+    history_boundary_dataset: pd.DataFrame,
+) -> None:
+    """Start forecasting when exactly 252 returns are available"""
+    fitter = RecordingFitter()
+
+    result = build_walk_forward_predictions(
+        history_boundary_dataset,
+        fitter,
+        target_splits=("train",),
+        min_history=252,
+    )
+
+    assert result["date"].tolist() == [
+        history_boundary_dataset.iloc[251]["date"],
+        history_boundary_dataset.iloc[252]["date"],
+    ]
+    assert [len(history) for _, history in fitter.calls] == [252, 253]
+    for (_, history), observation in zip(
+        fitter.calls,
+        fitter.observations,
+        strict=True,
+    ):
+        assert history["date"].max() <= observation["date"].iloc[0]
+
+
+def test_walk_forward_progress_counts_only_eligible_targets(
+    history_boundary_dataset: pd.DataFrame,
+) -> None:
+    """Report progress against history-eligible forecast targets"""
+    progress: list[tuple[int, int]] = []
+
+    build_walk_forward_predictions(
+        history_boundary_dataset,
+        RecordingFitter(),
+        target_splits=("train",),
+        min_history=252,
+        progress=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert progress == [(1, 2), (2, 2)]
+
+
+@pytest.mark.parametrize(
+    "target_splits",
+    [
+        (),
+        ("validation", "validation"),
+        ("test",),
+        ("validation", 1),
+        "validation",
+    ],
+)
+def test_walk_forward_rejects_invalid_target_splits(
+    model_dataset: pd.DataFrame,
+    target_splits: object,
+) -> None:
+    """Reject empty duplicate unsupported and malformed schedules"""
+    with pytest.raises(ValueError, match="target_splits"):
+        build_walk_forward_predictions(
+            model_dataset,
+            RecordingFitter(),
+            target_splits=cast(tuple[str, ...], target_splits),
+        )
+
+
+@pytest.mark.parametrize("min_history", [True, False, 0, -1, 1.5, "2", None])
+def test_walk_forward_rejects_invalid_minimum_history(
+    model_dataset: pd.DataFrame,
+    min_history: object,
+) -> None:
+    """Reject minimum history values outside positive integers"""
+    with pytest.raises(ValueError, match="min_history"):
+        build_walk_forward_predictions(
+            model_dataset,
+            RecordingFitter(),
+            min_history=cast(int, min_history),
+        )
+
+
+def test_walk_forward_rejects_noncallable_progress(
+    model_dataset: pd.DataFrame,
+) -> None:
+    """Reject progress values that cannot receive updates"""
+    with pytest.raises(ValueError, match="progress"):
+        build_walk_forward_predictions(
+            model_dataset,
+            RecordingFitter(),
+            progress=cast(Callable[[int, int], None], 1),
+        )
+
+
+def test_walk_forward_rejects_schedule_without_eligible_targets(
+    model_dataset: pd.DataFrame,
+) -> None:
+    """Reject schedules fully removed by history requirements"""
+    with pytest.raises(ValueError, match="eligible"):
+        build_walk_forward_predictions(
+            model_dataset,
+            RecordingFitter(),
+            target_splits=("validation",),
+            min_history=100,
+        )
 
 
 @pytest.mark.parametrize("missing_column", DATASET_COLUMNS)
