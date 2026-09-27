@@ -308,7 +308,7 @@ def _load_run(path: Path, fingerprint: str) -> LSTMRunResult:
         if not isinstance(predictions_name, str) or predictions_name != f"{run_context}.csv":
             raise ValueError("predictions filename is invalid")
         predictions_path = path.parent / predictions_name
-        predictions = pd.read_csv(predictions_path, index_col=0)
+        predictions = pd.read_csv(predictions_path, index_col=0, float_precision="round_trip")
         if predictions.columns.tolist() != list(PREDICTION_COLUMNS):
             raise ValueError("predictions must use standard columns in standard order")
         status = metadata.get("status")

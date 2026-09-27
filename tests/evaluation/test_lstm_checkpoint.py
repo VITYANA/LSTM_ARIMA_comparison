@@ -190,6 +190,19 @@ def test_checkpoint_round_trip_preserves_terminal_results(
         assert pd.api.types.is_datetime64_any_dtype(actual.predictions["target_date"])
 
 
+def test_checkpoint_preserves_prediction_float_precision(tmp_path: Path) -> None:
+    """Preserve exact forecasts across checkpoint save and resume"""
+    directory = checkpoint_directory(tmp_path)
+    expected = run_result()
+    expected.predictions["actual_return"] = [0.012345678912345678, -0.00012345678912345678]
+    expected.predictions["predicted_return"] = [-0.019876543219876543, 0.0009876543219876543]
+
+    save_lstm_run(directory, FINGERPRINT, expected)
+    restored = load_lstm_runs(directory, FINGERPRINT)[expected.key.run_id]
+
+    pd.testing.assert_frame_equal(restored.predictions, expected.predictions, check_exact=True)
+
+
 def test_save_lstm_run_atomically_replaces_existing_run(tmp_path: Path) -> None:
     """Replace both files without leaving temporary siblings"""
     directory = checkpoint_directory(tmp_path)
