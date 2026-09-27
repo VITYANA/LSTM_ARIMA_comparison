@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import cast
 
 import numpy as np
@@ -21,11 +22,13 @@ from data.sequences import (
 )
 from evaluation.contracts import BPS_FACTOR, PREDICTION_COLUMNS, PREDICTION_NAME
 from evaluation.lstm_validation import (
+    CORE_TICKERS,
     LSTMRunKey,
     LSTMRunResult,
     run_lstm_candidate,
+    run_lstm_grid,
 )
-from models.lstm import LSTMConfig, LSTMTrainer
+from models.lstm import LSTMConfig, LSTMTrainer, build_lstm_grid
 
 TRAIN_ROWS = 10
 VALIDATION_ROWS = 3
@@ -59,6 +62,20 @@ def make_dataset(
         },
         index=pd.Index(range(100, 100 + row_count), name="source_index"),
     )
+
+
+def make_core_dataset(*, include_extra: bool = False) -> pd.DataFrame:
+    """Build all core ticker rows plus optional excluded ticker"""
+    tickers = [*CORE_TICKERS, *(["TSLA"] if include_extra else [])]
+    frames = []
+    for position, ticker in enumerate(tickers):
+        frame = make_dataset(ticker=ticker)
+        frame.index = pd.Index(
+            np.arange(len(frame)) + 1_000 * (position + 1),
+            name="source_index",
+        )
+        frames.append(frame)
+    return pd.concat(frames).sample(frac=1, random_state=19)
 
 
 class RecordingModel:
@@ -405,3 +422,230 @@ def test_run_lstm_candidate_raises_for_structural_dataset_errors(
 
     with pytest.raises(ValueError):
         run_candidate(invalid, RecordingTrainer())
+
+
+def terminal_result(key: LSTMRunKey, status: str = "failed") -> LSTMRunResult:
+    """Build one lightweight result for grid scheduling tests"""
+    return LSTMRunResult(
+        key=key,
+        status=status,  # type: ignore[arg-type]
+        best_epoch=None,
+        parameter_count=None,
+        mae_bps=float("nan"),
+        rmse_bps=float("nan"),
+        predictions=pd.DataFrame(columns=PREDICTION_COLUMNS),
+        error=f"controlled {status}",
+    )
+
+
+def test_run_lstm_grid_schedules_default_480_runs_without_test_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Schedule core grid deterministically and exclude final test"""
+    dataset = make_core_dataset(include_extra=True)
+    original = dataset.copy(deep=True)
+    calls: list[tuple[LSTMRunKey, pd.DataFrame]] = []
+
+    def fake_run(
+        frame: pd.DataFrame,
+        key: LSTMRunKey,
+        trainer: LSTMTrainer,
+    ) -> LSTMRunResult:
+        del trainer
+        calls.append((key, frame.copy(deep=True)))
+        return terminal_result(key)
+
+    monkeypatch.setattr(validation_module, "run_lstm_candidate", fake_run)
+    monkeypatch.setattr("evaluation.lstm_checkpoint.load_lstm_runs", lambda *_: {})
+    monkeypatch.setattr("evaluation.lstm_checkpoint.save_lstm_run", lambda *_: None)
+
+    results = run_lstm_grid(
+        dataset,
+        "1" * 64,
+        tmp_path / "artifacts" / "lstm",
+        cast(LSTMTrainer, RecordingTrainer()),
+    )
+
+    pd.testing.assert_frame_equal(dataset, original)
+    assert len(results) == 4 * 12 * 10 == 480
+    assert len(calls) == 480
+    assert [result.key for result in results] == [call[0] for call in calls]
+    assert [key.ticker for key, _ in calls[:120]] == ["AAPL"] * 120
+    assert tuple(dict.fromkeys(key.config for key, _ in calls[:120])) == build_lstm_grid()
+    assert [key.seed for key, _ in calls[:10]] == list(range(10))
+    assert all(set(frame["ticker"]) == set(CORE_TICKERS) for _, frame in calls)
+    assert all(set(frame["split"]) == {"train", "validation"} for _, frame in calls)
+
+
+def test_run_lstm_grid_resumes_all_terminal_statuses(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Skip cached statuses and report progress through completion"""
+    from evaluation.lstm_checkpoint import build_lstm_fingerprint, save_lstm_run
+
+    dataset = make_core_dataset()
+    config = LSTMConfig(5, 16, 0.0)
+    seeds = (0, 1)
+    directory = tmp_path / "artifacts" / "lstm"
+    fingerprint = build_lstm_fingerprint("1" * 64, (config,), seeds)
+    cached = [
+        terminal_result(LSTMRunKey("AAPL", config, 0), "failed"),
+        terminal_result(LSTMRunKey("JPM", config, 0), "non_finite"),
+        LSTMRunResult(
+            key=LSTMRunKey("SPY", config, 0),
+            status="ok",
+            best_epoch=2,
+            parameter_count=10,
+            mae_bps=1.0,
+            rmse_bps=1.0,
+            predictions=pd.DataFrame(
+                {
+                    "date": [pd.Timestamp("2020-01-01")],
+                    "target_date": [pd.Timestamp("2020-01-02")],
+                    "ticker": ["SPY"],
+                    "split": ["validation"],
+                    "model": ["lstm_w5_u16_d00_seed_00"],
+                    "actual_return": [0.0],
+                    "predicted_return": [0.0],
+                },
+                columns=PREDICTION_COLUMNS,
+            ),
+            error=None,
+        ),
+    ]
+    for result in cached:
+        save_lstm_run(directory, fingerprint, result)
+    executed: list[str] = []
+    progress: list[tuple[int, int, str]] = []
+
+    def fake_run(
+        frame: pd.DataFrame,
+        key: LSTMRunKey,
+        trainer: LSTMTrainer,
+    ) -> LSTMRunResult:
+        del frame, trainer
+        executed.append(key.run_id)
+        return terminal_result(key)
+
+    monkeypatch.setattr(validation_module, "run_lstm_candidate", fake_run)
+
+    results = run_lstm_grid(
+        dataset,
+        "1" * 64,
+        directory,
+        cast(LSTMTrainer, RecordingTrainer()),
+        configs=(config,),
+        seeds=seeds,
+        progress=lambda completed, total, run_id: progress.append((completed, total, run_id)),
+    )
+
+    expected_keys = [LSTMRunKey(ticker, config, seed) for ticker in CORE_TICKERS for seed in seeds]
+    cached_ids = {result.key.run_id for result in cached}
+    assert [result.key for result in results] == expected_keys
+    assert executed == [key.run_id for key in expected_keys if key.run_id not in cached_ids]
+    assert progress[0] == (len(cached), len(expected_keys), "")
+    assert progress[-1] == (len(expected_keys), len(expected_keys), expected_keys[-1].run_id)
+
+
+@pytest.mark.parametrize(
+    ("configs", "seeds", "message"),
+    [
+        ((), (0,), "configs"),
+        ((LSTMConfig(5, 16, 0.0),) * 2, (0,), "duplicate config"),
+        ((LSTMConfig(5, 16, 0.0),), (), "seeds"),
+        ((LSTMConfig(5, 16, 0.0),), (0, 0), "duplicate seed"),
+        ((LSTMConfig(5, 16, 0.0),), (10,), "seed"),
+    ],
+)
+def test_run_lstm_grid_rejects_invalid_schedules(
+    tmp_path: Path,
+    configs: tuple[LSTMConfig, ...],
+    seeds: tuple[int, ...],
+    message: str,
+) -> None:
+    """Reject empty duplicate and unsupported schedules"""
+    with pytest.raises(ValueError, match=message):
+        run_lstm_grid(
+            make_core_dataset(),
+            "1" * 64,
+            tmp_path / "artifacts" / "lstm",
+            cast(LSTMTrainer, RecordingTrainer()),
+            configs=configs,
+            seeds=seeds,
+        )
+
+
+def test_run_lstm_grid_rejects_invalid_config_type_and_progress(
+    tmp_path: Path,
+) -> None:
+    """Reject nonconfig candidates and noncallable progress values"""
+    dataset = make_core_dataset()
+    directory = tmp_path / "artifacts" / "lstm"
+    trainer = cast(LSTMTrainer, RecordingTrainer())
+    with pytest.raises(ValueError, match="configs"):
+        run_lstm_grid(
+            dataset,
+            "1" * 64,
+            directory,
+            trainer,
+            configs=cast(tuple[LSTMConfig, ...], (object(),)),
+            seeds=(0,),
+        )
+    with pytest.raises(ValueError, match="progress"):
+        run_lstm_grid(
+            dataset,
+            "1" * 64,
+            directory,
+            trainer,
+            configs=(LSTMConfig(5, 16, 0.0),),
+            seeds=(0,),
+            progress=cast(Callable[[int, int, str], None], 7),
+        )
+
+
+def test_run_lstm_grid_rejects_unexpected_cached_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Reject cache entries outside current fingerprint schedule"""
+    config = LSTMConfig(5, 16, 0.0)
+    unexpected = terminal_result(LSTMRunKey("AAPL", config, 1))
+    monkeypatch.setattr(
+        "evaluation.lstm_checkpoint.load_lstm_runs",
+        lambda *_: {unexpected.key.run_id: unexpected},
+    )
+
+    with pytest.raises(ValueError, match="unexpected"):
+        run_lstm_grid(
+            make_core_dataset(),
+            "1" * 64,
+            tmp_path / "artifacts" / "lstm",
+            cast(LSTMTrainer, RecordingTrainer()),
+            configs=(config,),
+            seeds=(0,),
+        )
+
+
+@pytest.mark.parametrize("failure", ["missing_ticker", "test_only"])
+def test_run_lstm_grid_rejects_incomplete_evaluation_data(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    """Require train and validation rows for every core ticker"""
+    dataset = make_core_dataset()
+    if failure == "missing_ticker":
+        dataset = dataset.loc[dataset["ticker"].ne("XOM")]
+    else:
+        dataset = dataset.assign(split="test")
+
+    with pytest.raises(ValueError, match="ticker|train.*validation"):
+        run_lstm_grid(
+            dataset,
+            "1" * 64,
+            tmp_path / "artifacts" / "lstm",
+            cast(LSTMTrainer, RecordingTrainer()),
+            configs=(LSTMConfig(5, 16, 0.0),),
+            seeds=(0,),
+        )

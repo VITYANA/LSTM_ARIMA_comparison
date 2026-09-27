@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -24,10 +26,17 @@ from evaluation.contracts import (
     validate_model_dataset,
     validate_prediction_series,
 )
-from models.lstm import MAX_SEED, MIN_SEED, LSTMConfig, LSTMTrainer
+from models.lstm import (
+    MAX_SEED,
+    MIN_SEED,
+    LSTMConfig,
+    LSTMTrainer,
+    build_lstm_grid,
+)
 
 CORE_TICKERS = ("AAPL", "JPM", "SPY", "XOM")
 RunStatus = Literal["ok", "failed", "non_finite"]
+ProgressCallback = Callable[[int, int, str], None]
 
 
 @dataclass(frozen=True)
@@ -219,3 +228,96 @@ def run_lstm_candidate(
         predictions=predictions,
         error=None,
     )
+
+
+def _validate_grid_configs(
+    configs: Sequence[LSTMConfig] | None,
+) -> tuple[LSTMConfig, ...]:
+    """Return a nonempty sequence of unique configurations."""
+    values = build_lstm_grid() if configs is None else tuple(configs)
+    if not values:
+        raise ValueError("configs must not be empty")
+    if not all(isinstance(config, LSTMConfig) for config in values):
+        raise ValueError("configs must contain LSTMConfig values")
+    if len(set(values)) != len(values):
+        raise ValueError("duplicate config values are not allowed")
+    return values
+
+
+def _validate_grid_seeds(seeds: Sequence[int]) -> tuple[int, ...]:
+    """Return a nonempty sequence of unique supported seeds."""
+    values = tuple(seeds)
+    if not values:
+        raise ValueError("seeds must not be empty")
+    if any(type(seed) is not int or not MIN_SEED <= seed <= MAX_SEED for seed in values):
+        raise ValueError(f"seed must be an integer from {MIN_SEED} through {MAX_SEED}")
+    if len(set(values)) != len(values):
+        raise ValueError("duplicate seed values are not allowed")
+    return values
+
+
+def _grid_evaluation_data(dataset: pd.DataFrame) -> pd.DataFrame:
+    """Return core train and validation rows after structural checks."""
+    validate_model_dataset(dataset)
+    evaluation_data = dataset.loc[
+        dataset["ticker"].isin(CORE_TICKERS) & dataset["split"].isin(EVALUATION_SPLITS)
+    ].copy()
+    if evaluation_data.empty:
+        raise ValueError("dataset must contain train and validation rows")
+    for ticker in CORE_TICKERS:
+        ticker_splits = set(evaluation_data.loc[evaluation_data["ticker"].eq(ticker), "split"])
+        if ticker_splits != set(EVALUATION_SPLITS):
+            raise ValueError(f"ticker {ticker!r} must contain train and validation rows")
+    return evaluation_data
+
+
+def run_lstm_grid(
+    dataset: pd.DataFrame,
+    dataset_sha256: str,
+    checkpoint_dir: Path,
+    trainer: LSTMTrainer,
+    configs: Sequence[LSTMConfig] | None = None,
+    seeds: Sequence[int] = tuple(range(10)),
+    progress: ProgressCallback | None = None,
+) -> tuple[LSTMRunResult, ...]:
+    """Resume and execute the deterministic core-ticker LSTM grid."""
+    from evaluation import lstm_checkpoint
+
+    config_values = _validate_grid_configs(configs)
+    seed_values = _validate_grid_seeds(seeds)
+    evaluation_data = _grid_evaluation_data(dataset)
+    if progress is not None and not callable(progress):
+        raise ValueError("progress must be callable or None")
+
+    fingerprint = lstm_checkpoint.build_lstm_fingerprint(
+        dataset_sha256,
+        config_values,
+        seed_values,
+    )
+    scheduled_keys = tuple(
+        LSTMRunKey(ticker, config, seed)
+        for ticker in CORE_TICKERS
+        for config in config_values
+        for seed in seed_values
+    )
+    expected_ids = {key.run_id for key in scheduled_keys}
+    cached = lstm_checkpoint.load_lstm_runs(checkpoint_dir, fingerprint)
+    unexpected_ids = set(cached) - expected_ids
+    if unexpected_ids:
+        raise ValueError(f"checkpoint contains unexpected runs: {sorted(unexpected_ids)}")
+    completed = len(cached)
+    total = len(scheduled_keys)
+    if progress is not None:
+        progress(completed, total, "")
+
+    results = dict(cached)
+    for key in scheduled_keys:
+        if key.run_id in results:
+            continue
+        result = run_lstm_candidate(evaluation_data, key, trainer)
+        lstm_checkpoint.save_lstm_run(checkpoint_dir, fingerprint, result)
+        results[key.run_id] = result
+        completed += 1
+        if progress is not None:
+            progress(completed, total, key.run_id)
+    return tuple(results[key.run_id] for key in scheduled_keys)
