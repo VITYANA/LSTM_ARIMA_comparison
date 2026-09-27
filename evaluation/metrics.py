@@ -23,7 +23,7 @@ METRIC_COLUMNS = (
     "oos_r2",
     "directional_accuracy",
 )
-ALIGNMENT_COLUMNS = ("split", "ticker", "target_date")
+ALIGNMENT_COLUMNS = ("split", "ticker", "date", "target_date")
 UNIQUE_KEY_COLUMNS = (*ALIGNMENT_COLUMNS, "model")
 
 
