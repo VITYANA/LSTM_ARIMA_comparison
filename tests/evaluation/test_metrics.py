@@ -274,7 +274,7 @@ def test_calculate_metrics_rejects_inconsistent_actual_returns(
         calculate_metrics(invalid)
 
 
-@pytest.mark.parametrize("mismatch", ["missing", "different"])
+@pytest.mark.parametrize("mismatch", ["missing", "target_date", "origin_date"])
 def test_calculate_metrics_requires_exact_candidate_keys(
     paired_predictions: pd.DataFrame,
     mismatch: str,
@@ -284,8 +284,10 @@ def test_calculate_metrics_requires_exact_candidate_keys(
     candidate_indexes = invalid.index[invalid["model"].eq("candidate")]
     if mismatch == "missing":
         invalid = invalid.drop(index=candidate_indexes[-1])
-    else:
+    elif mismatch == "target_date":
         invalid.loc[candidate_indexes[-1], "target_date"] = pd.Timestamp("2020-01-04")
+    else:
+        invalid.loc[candidate_indexes[-1], "date"] = pd.Timestamp("2019-12-31")
 
     with pytest.raises(ValueError, match="keys"):
         calculate_metrics(invalid)

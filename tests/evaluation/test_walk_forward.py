@@ -148,6 +148,21 @@ def test_build_walk_forward_predictions_uses_expanding_history(
         assert "test" not in history["split"].values
 
 
+def test_build_walk_forward_predictions_reports_completed_observations(
+    model_dataset: pd.DataFrame,
+) -> None:
+    """Report progress after every completed validation forecast"""
+    progress: list[tuple[int, int]] = []
+
+    build_walk_forward_predictions(
+        model_dataset,
+        RecordingFitter(),
+        progress=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert progress == [(1, 4), (2, 4), (3, 4), (4, 4)]
+
+
 @pytest.mark.parametrize("missing_column", DATASET_COLUMNS)
 def test_build_walk_forward_predictions_rejects_missing_columns(
     model_dataset: pd.DataFrame,

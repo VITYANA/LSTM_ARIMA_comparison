@@ -18,6 +18,7 @@ from evaluation.contracts import (
 from models.interfaces import ForecastModel, validate_model_name
 
 ModelFitter = Callable[[str, pd.DataFrame], ForecastModel]
+ProgressCallback = Callable[[int, int], None]
 RETURN_COLUMN = "log_return"
 VALIDATION_SPLIT = "validation"
 
@@ -25,6 +26,8 @@ VALIDATION_SPLIT = "validation"
 def build_walk_forward_predictions(
     dataset: pd.DataFrame,
     fitter: ModelFitter,
+    *,
+    progress: ProgressCallback | None = None,
 ) -> pd.DataFrame:
     """Build validation forecasts from daily expanding ticker histories."""
     validate_model_dataset(dataset)
@@ -77,5 +80,7 @@ def build_walk_forward_predictions(
                 PREDICTION_NAME: predictions.iloc[0],
             }
         )
+        if progress is not None:
+            progress(position + 1, len(validation))
 
     return pd.DataFrame(rows, columns=PREDICTION_COLUMNS).reset_index(drop=True)

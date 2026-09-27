@@ -15,6 +15,7 @@ from models.interfaces import validate_model_name
 ARIMAOrder = tuple[int, int, int]
 PREDICTION_NAME = "predicted_return"
 RETURN_COLUMN = "log_return"
+FALLBACK_OPTIMIZER = "powell"
 SEARCH_COLUMNS = (
     "ticker",
     "p",
@@ -113,11 +114,15 @@ class ARIMAModel:
         values = _return_values(history)
 
         try:
-            fitted = StatsmodelsARIMA(
+            arima = StatsmodelsARIMA(
                 values,
                 order=validated_order,
                 trend=_trend_for_order(validated_order),
-            ).fit()
+            )
+            fitted = arima.fit()
+            result = cast(_ARIMAResult, fitted)
+            if result.mle_retvals.get("converged") is not True:
+                fitted = arima.fit(method_kwargs={"method": FALLBACK_OPTIMIZER})
         except Exception as error:
             raise ValueError(f"ARIMA order {validated_order} fit failed: {error}") from error
 

@@ -72,7 +72,8 @@ EOD API. Исходные снимки данных будут сохранят�
 │   ├── 01_data_quality.ipynb
 │   ├── 02_exploratory_analysis.ipynb
 │   ├── 03_stationarity_analysis.ipynb
-│   └── 04_evaluation_baseline.ipynb
+│   ├── 04_evaluation_baseline.ipynb
+│   └── 05_arima_validation.ipynb
 ├── docs/
 │   ├── arima_protocol.md      # train shortlist и validation selection
 │   ├── evaluation_protocol.md # критерии этапа оценки
@@ -133,6 +134,25 @@ poetry run jupyter execute notebooks/04_evaluation_baseline.ipynb --inplace
 Notebook рассчитывает baseline отдельно для train и validation. Final test не
 передаётся модели и не отображается в результатах.
 
+## Воспроизведение выбора ARIMA
+
+Перед запуском должен существовать проверяемый обработанный снимок
+`data/processed/next_trading_day_returns.csv` и соответствующий манифест. При
+необходимости создайте их командой `poetry run python -m data.prepare`.
+
+Выполнить train-поиск, ежедневный validation backtest и сохранить результаты:
+
+```bash
+poetry run jupyter execute notebooks/05_arima_validation.ipynb --inplace
+```
+
+Notebook проверяет 36 порядков `ARIMA(p, 0, q)` для каждого основного тикера,
+формирует BIC top-3 и выбирает окончательный порядок по validation MAE. В
+сохранённом запуске выбраны `ARIMA(0,0,0)` для AAPL, `ARIMA(0,0,1)` для JPM,
+`ARIMA(0,0,2)` для SPY и `ARIMA(2,0,1)` для XOM. На объединённой validation
+ARIMA получила MAE `84.314` б.п. против `84.101` б.п. у `naive_zero`. Эти
+значения относятся к model selection; final test остаётся закрытым.
+
 ## Проверки качества
 
 Локально выполняются те же проверки, что и в GitHub Actions:
@@ -163,10 +183,9 @@ poetry run pre-commit run --all-files
 ## Статус
 
 Подготовлены воспроизводимый конвейер данных, модельный набор, EDA, диагностика
-стационарности, evaluation pipeline, наивный baseline и код двухступенчатого
-выбора ARIMA. Выполнение ARIMA validation notebook и интерпретация его
-результатов ещё не завершены; final test остаётся закрытым. LSTM и ARIMA-LSTM
-выполняются на следующих этапах.
+стационарности, evaluation pipeline, наивный baseline и выполненный
+двухступенчатый выбор ARIMA на validation. Порядки ARIMA зафиксированы, а final
+test остаётся закрытым. LSTM и ARIMA-LSTM выполняются на следующих этапах.
 
 ## Лицензия
 

@@ -205,6 +205,7 @@ def test_arima_model_fit_rejects_non_converged_result(
     history: pd.DataFrame,
 ) -> None:
     """Reject optimizer results that did not converge"""
+    fit_calls = 0
 
     class NonConvergedARIMA:
         """Return a controlled non-converged fit."""
@@ -212,14 +213,48 @@ def test_arima_model_fit_rejects_non_converged_result(
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
-        def fit(self) -> FakeResult:
+        def fit(self, **_kwargs: object) -> FakeResult:
             """Return non-converged optimizer metadata"""
+            nonlocal fit_calls
+            fit_calls += 1
             return FakeResult([0.0], converged=False)
 
     monkeypatch.setattr(arima_module, "StatsmodelsARIMA", NonConvergedARIMA)
 
     with pytest.raises(ValueError, match=r"\(1, 0, 2\).*converge"):
         ARIMAModel.fit(history, (1, 0, 2))
+    assert fit_calls == 2
+
+
+def test_arima_model_fit_retries_non_convergence_with_powell(
+    monkeypatch: pytest.MonkeyPatch,
+    history: pd.DataFrame,
+) -> None:
+    """Retry transient optimizer non-convergence with Powell"""
+    fit_options: list[dict[str, str] | None] = []
+
+    class RetryARIMA:
+        """Converge only when fitted with the fallback optimizer."""
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def fit(
+            self,
+            *,
+            method_kwargs: dict[str, str] | None = None,
+        ) -> FakeResult:
+            """Record optimizer settings and return controlled results"""
+            fit_options.append(method_kwargs)
+            return FakeResult([0.025], converged=method_kwargs == {"method": "powell"})
+
+    monkeypatch.setattr(arima_module, "StatsmodelsARIMA", RetryARIMA)
+
+    model = ARIMAModel.fit(history, (0, 0, 0))
+    result = model.predict(pd.DataFrame(index=[7]))
+
+    assert result.tolist() == [0.025]
+    assert fit_options == [None, {"method": "powell"}]
 
 
 def test_arima_model_fit_wraps_failure_with_order(
