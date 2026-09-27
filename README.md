@@ -17,7 +17,8 @@ ARIMA-LSTM в задаче однодневного прогнозировани
 - Основная целевая переменная: логарифмическая доходность следующего торгового дня.
 - Дополнительные цели: восстановленная цена и направление движения.
 - Сравниваемые подходы: наивный прогноз, ARIMA, LSTM и ARIMA-LSTM.
-- Проверка качества: expanding-window backtest без перемешивания наблюдений.
+- Проверка качества: хронологический backtest без перемешивания наблюдений;
+  ARIMA переобучается на expanding window, LSTM использует фиксированные train-веса.
 
 ## Основные гипотезы
 
@@ -55,11 +56,15 @@ EOD API. Исходные снимки данных будут сохранят�
 ├── data/
 │   ├── data.py                # загрузка и фиксация сырых данных
 │   ├── prepare.py             # обработанный снимок и его манифест
+│   ├── sequences.py           # leakage-safe окна и масштабирование LSTM
 │   ├── raw/                   # локальные исходные снимки
 │   └── processed/             # локальный модельный набор и манифест
 ├── evaluation/
 │   ├── contracts.py           # общий контракт таблицы прогнозов
 │   ├── loading.py             # проверяемая загрузка модельного набора
+│   ├── lstm_checkpoint.py     # fingerprint и возобновляемые checkpoint
+│   ├── lstm_selection.py      # агрегация seed и выбор LSTM
+│   ├── lstm_validation.py     # один запуск и полный LSTM grid
 │   ├── metrics.py             # относительные и pooled-метрики
 │   ├── pipeline.py            # стандартизация прогнозов моделей
 │   ├── selection.py           # выбор порядка ARIMA на validation
@@ -67,16 +72,19 @@ EOD API. Исходные снимки данных будут сохранят�
 ├── models/
 │   ├── arima.py               # поиск, обучение и BIC shortlist ARIMA
 │   ├── interfaces.py          # структурный интерфейс ForecastModel
+│   ├── lstm.py                # TensorFlow LSTM, trainer и seed ensemble
 │   └── naive.py               # нулевой прогноз доходности
 ├── notebooks/
 │   ├── 01_data_quality.ipynb
 │   ├── 02_exploratory_analysis.ipynb
 │   ├── 03_stationarity_analysis.ipynb
 │   ├── 04_evaluation_baseline.ipynb
-│   └── 05_arima_validation.ipynb
+│   ├── 05_arima_validation.ipynb
+│   └── 06_lstm_validation.ipynb
 ├── docs/
 │   ├── arima_protocol.md      # train shortlist и validation selection
 │   ├── evaluation_protocol.md # критерии этапа оценки
+│   ├── lstm_protocol.md       # grid, seed ensemble и правила выбора
 │   └── research_protocol.md   # протокол эксперимента
 └── tests/
     ├── analysis/
@@ -153,6 +161,40 @@ Notebook проверяет 36 порядков `ARIMA(p, 0, q)` для кажд
 ARIMA получила MAE `84.314` б.п. против `84.101` б.п. у `naive_zero`. Эти
 значения относятся к model selection; final test остаётся закрытым.
 
+## Воспроизведение выбора LSTM
+
+Notebook использует проверенный обработанный снимок и сохраняет каждый
+завершённый запуск в локальном `artifacts/lstm_validation/`. Совместимый
+checkpoint позволяет продолжить расчёт после остановки, не повторяя готовые
+запуски.
+
+```bash
+poetry run jupyter execute notebooks/06_lstm_validation.ipynb --inplace --timeout=-1
+```
+
+Полный grid содержит 480 двухэтапных запусков TensorFlow и может выполняться
+долго. В сохранённом notebook все 480 запусков завершились успешно. Выбранный
+seed-ensemble получил на объединённой validation MAE `83.838` б.п. и RMSE
+`122.517` б.п. против `84.101` и `122.726` б.п. у `naive_zero`. Улучшение
+небольшое и относится к model selection, а не к независимой оценке качества.
+Final test остаётся закрытым.
+
+Для ночного запуска на macOS можно предотвратить сон из-за бездействия:
+
+```bash
+caffeinate -i poetry run jupyter execute notebooks/06_lstm_validation.ipynb --inplace --timeout=-1
+```
+
+Оставьте ноутбук подключённым к питанию и с открытой крышкой. Прогресс LSTM
+обновляется после каждого двухэтапного запуска, а ETA появляется после первого
+нового результата. После LSTM отдельно выполняется повторный backtest ARIMA
+с индикацией прогресса; этот блок не использует checkpoint.
+
+Прогресс виден в ячейках при интерактивном запуске notebook. Команда
+`jupyter execute` не транслирует этот вывод в терминал и сохраняет выполненный
+notebook после успешного завершения. При остановке сохранённые checkpoint LSTM
+остаются доступными для возобновления.
+
 ## Проверки качества
 
 Локально выполняются те же проверки, что и в GitHub Actions:
@@ -184,8 +226,12 @@ poetry run pre-commit run --all-files
 
 Подготовлены воспроизводимый конвейер данных, модельный набор, EDA, диагностика
 стационарности, evaluation pipeline, наивный baseline и выполненный
-двухступенчатый выбор ARIMA на validation. Порядки ARIMA зафиксированы, а final
-test остаётся закрытым. LSTM и ARIMA-LSTM выполняются на следующих этапах.
+двухступенчатый выбор ARIMA на validation и полный одномерный LSTM grid search
+с checkpoint и seed-ensemble. Порядки ARIMA и конфигурации LSTM зафиксированы.
+LSTM лишь незначительно превзошла `naive_zero` на объединённой validation,
+поэтому вывод о качестве будет сделан только после однократной оценки
+зафиксированных моделей на final test. ARIMA-LSTM выполняется на следующем
+этапе.
 
 ## Лицензия
 
