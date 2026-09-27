@@ -60,6 +60,8 @@ EOD API. Исходные снимки данных будут сохранят�
 │   ├── raw/                   # локальные исходные снимки
 │   └── processed/             # локальный модельный набор и манифест
 ├── evaluation/
+│   ├── arima_lstm.py          # выравнивание и аддитивная композиция гибрида
+│   ├── arima_residuals.py     # leakage-safe набор реализованных остатков
 │   ├── contracts.py           # общий контракт таблицы прогнозов
 │   ├── loading.py             # проверяемая загрузка модельного набора
 │   ├── lstm_checkpoint.py     # fingerprint и возобновляемые checkpoint
@@ -67,6 +69,7 @@ EOD API. Исходные снимки данных будут сохранят�
 │   ├── lstm_validation.py     # один запуск и полный LSTM grid
 │   ├── metrics.py             # относительные и pooled-метрики
 │   ├── pipeline.py            # стандартизация прогнозов моделей
+│   ├── residual_checkpoint.py # checkpoint expanding ARIMA-прогнозов
 │   ├── selection.py           # выбор порядка ARIMA на validation
 │   └── walk_forward.py        # ежедневный expanding-window backtest
 ├── models/
@@ -80,8 +83,10 @@ EOD API. Исходные снимки данных будут сохранят�
 │   ├── 03_stationarity_analysis.ipynb
 │   ├── 04_evaluation_baseline.ipynb
 │   ├── 05_arima_validation.ipynb
-│   └── 06_lstm_validation.ipynb
+│   ├── 06_lstm_validation.ipynb
+│   └── 07_arima_lstm_validation.ipynb
 ├── docs/
+│   ├── arima_lstm_protocol.md # остатки, residual LSTM и композиция
 │   ├── arima_protocol.md      # train shortlist и validation selection
 │   ├── evaluation_protocol.md # критерии этапа оценки
 │   ├── lstm_protocol.md       # grid, seed ensemble и правила выбора
@@ -195,6 +200,36 @@ caffeinate -i poetry run jupyter execute notebooks/06_lstm_validation.ipynb --in
 notebook после успешного завершения. При остановке сохранённые checkpoint LSTM
 остаются доступными для возобновления.
 
+## Воспроизведение выбора ARIMA-LSTM
+
+Notebook последовательно создаёт или загружает два локальных checkpoint:
+
+- `artifacts/arima_residuals/` — псевдовневыборочные ARIMA-прогнозы на train и
+  validation по каждому тикеру;
+- `artifacts/arima_lstm_validation/` — 480 запусков LSTM на реализованных
+  остатках.
+
+Обычный LSTM ensemble восстанавливается из `artifacts/lstm_validation/`.
+Запускайте notebook из корня проекта без ограничения времени:
+
+```bash
+poetry run jupyter execute notebooks/07_arima_lstm_validation.ipynb --inplace --timeout=-1
+```
+
+Расчёт можно прервать и продолжить совместимым повторным запуском. Этап
+выполнен полностью: expanding ARIMA backtest занял около `28.0` минуты, а все
+`480` запусков residual LSTM завершились со статусом `ok` примерно за `190.2`
+минуты. На объединённой validation ARIMA-LSTM получила MAE `83.808` б.п. и RMSE
+`122.506` б.п. против `83.838` и `122.517` б.п. у обычной LSTM. Преимущество
+гибрида минимально и относится к model selection. Final test в notebook не
+моделируется и не оценивается.
+
+Для ночного запуска на macOS:
+
+```bash
+caffeinate -i poetry run jupyter execute notebooks/07_arima_lstm_validation.ipynb --inplace --timeout=-1
+```
+
 ## Проверки качества
 
 Локально выполняются те же проверки, что и в GitHub Actions:
@@ -228,10 +263,12 @@ poetry run pre-commit run --all-files
 стационарности, evaluation pipeline, наивный baseline и выполненный
 двухступенчатый выбор ARIMA на validation и полный одномерный LSTM grid search
 с checkpoint и seed-ensemble. Порядки ARIMA и конфигурации LSTM зафиксированы.
-LSTM лишь незначительно превзошла `naive_zero` на объединённой validation,
-поэтому вывод о качестве будет сделан только после однократной оценки
-зафиксированных моделей на final test. ARIMA-LSTM выполняется на следующем
-этапе.
+Реализованы псевдовневыборочные ARIMA-остатки, residual LSTM grid, checkpoint и
+выполненный validation notebook гибрида ARIMA-LSTM. Все `480` residual LSTM
+запусков завершились успешно. Гибрид показал минимальные pooled MAE и RMSE, но
+улучшение относительно обычной LSTM составило лишь `0.036%` по MAE и `0.009%`
+по RMSE. Поэтому окончательный вывод о качестве будет сделан только после
+однократной оценки зафиксированных моделей на final test.
 
 ## Лицензия
 
