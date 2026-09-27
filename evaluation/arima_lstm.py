@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from analysis.preparation import DEFAULT_SPLIT_CONFIG
 from evaluation.contracts import PREDICTION_COLUMNS, require_finite_numeric
 from models.interfaces import validate_model_name
 
@@ -14,6 +15,17 @@ ARIMA_MODEL_NAME = "arima"
 ALIGNMENT_COLUMNS = ("date", "target_date", "ticker", "split")
 SORT_COLUMNS = ("ticker", "target_date", "date", "split")
 RESIDUAL_IDENTITY_ATOL = 1e-12
+
+
+def _validated_validation_end(value: str | pd.Timestamp) -> pd.Timestamp:
+    """Return one finite timezone-naive validation boundary."""
+    try:
+        boundary = pd.Timestamp(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("validation end must be a valid datetime") from error
+    if pd.isna(boundary) or boundary.tz is not None:
+        raise ValueError("validation end must be a finite timezone-naive datetime")
+    return boundary
 
 
 def _validated_component(
@@ -30,6 +42,8 @@ def _validated_component(
     for column in ("date", "target_date"):
         if not pd.api.types.is_datetime64_any_dtype(predictions[column]):
             raise ValueError(f"{label} prediction {column} must be datetime")
+        if predictions[column].isna().any():
+            raise ValueError(f"{label} predictions contain missing dates")
     if not predictions["split"].eq("validation").all():
         raise ValueError(f"{label} predictions must contain validation rows only")
     if not predictions["model"].eq(expected_model).all():
@@ -50,9 +64,12 @@ def build_arima_lstm_predictions(
     arima_predictions: pd.DataFrame,
     residual_predictions: pd.DataFrame,
     model_name: str = HYBRID_MODEL_NAME,
+    *,
+    validation_end: str | pd.Timestamp = DEFAULT_SPLIT_CONFIG.validation_end,
 ) -> pd.DataFrame:
     """Add aligned residual forecasts to raw ARIMA forecasts."""
     hybrid_name = validate_model_name(model_name)
+    validated_end = _validated_validation_end(validation_end)
     arima = _validated_component(
         arima_predictions,
         label="ARIMA",
@@ -63,6 +80,8 @@ def build_arima_lstm_predictions(
         label="residual",
         expected_model=RESIDUAL_MODEL_NAME,
     )
+    if arima["target_date"].gt(validated_end).any():
+        raise ValueError("ARIMA predictions contain targets after validation end")
 
     arima_keys = arima.loc[:, ALIGNMENT_COLUMNS]
     residual_keys = residual.loc[:, ALIGNMENT_COLUMNS]

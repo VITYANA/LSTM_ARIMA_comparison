@@ -673,6 +673,41 @@ def test_run_arima_residual_backtest_resumes_completed_tickers(
     ]
 
 
+@pytest.mark.parametrize("case", ["missing_leading", "before_warmup"])
+def test_run_arima_residual_backtest_rejects_cached_schedule_mismatch(
+    tmp_path: Path,
+    case: str,
+) -> None:
+    """Reject incomplete and premature cached forecast schedules"""
+    dataset = make_dataset()
+    directory = checkpoint_directory(tmp_path)
+    fingerprint = build_residual_fingerprint(DATASET_DIGEST, FIXED_ARIMA_ORDERS, 252)
+    for ticker in FIXED_ARIMA_ORDERS:
+        predictions = prediction_table(dataset, ticker)
+        if ticker == "AAPL" and case == "missing_leading":
+            predictions = predictions.iloc[1:].reset_index(drop=True)
+        elif ticker == "AAPL" and case == "before_warmup":
+            observations = (
+                dataset.loc[
+                    dataset["ticker"].eq(ticker) & dataset["split"].isin(["train", "validation"])
+                ]
+                .sort_values("target_date")
+                .iloc[[250]]
+            )
+            early = observations.loc[:, ["date", "target_date", "ticker", "split"]].copy()
+            early["model"] = "arima"
+            early["actual_return"] = observations["target_return"].to_numpy()
+            early["predicted_return"] = 0.00025
+            predictions = pd.concat(
+                [early.loc[:, PREDICTION_COLUMNS], predictions],
+                ignore_index=True,
+            )
+        save_residual_predictions(directory, fingerprint, ticker, predictions)
+
+    with pytest.raises(ValueError, match="cached.*AAPL.*schedule"):
+        run_arima_residual_backtest(dataset, DATASET_DIGEST, directory)
+
+
 def test_run_arima_residual_backtest_preserves_completed_work_on_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

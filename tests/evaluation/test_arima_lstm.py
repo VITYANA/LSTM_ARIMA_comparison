@@ -21,6 +21,7 @@ from models.lstm import LSTMConfig
 
 ALIGNMENT_COLUMNS = ["date", "target_date", "ticker", "split"]
 BASE_CONFIG = LSTMConfig(5, 16, 0.0)
+TEST_VALIDATION_END = pd.Timestamp("2020-01-06")
 
 
 @pytest.fixture
@@ -92,7 +93,11 @@ def test_build_arima_lstm_predictions_adds_aligned_components(
     original_arima = arima.copy(deep=True)
     original_residual = residual.copy(deep=True)
 
-    result = build_arima_lstm_predictions(arima, residual)
+    result = build_arima_lstm_predictions(
+        arima,
+        residual,
+        validation_end=TEST_VALIDATION_END,
+    )
 
     pd.testing.assert_frame_equal(arima, original_arima)
     pd.testing.assert_frame_equal(residual, original_residual)
@@ -117,7 +122,12 @@ def test_build_arima_lstm_predictions_accepts_custom_model_name(
     """Use a valid caller-selected hybrid identifier"""
     arima, residual = component_predictions
 
-    result = build_arima_lstm_predictions(arima, residual, model_name="hybrid_candidate")
+    result = build_arima_lstm_predictions(
+        arima,
+        residual,
+        model_name="hybrid_candidate",
+        validation_end=TEST_VALIDATION_END,
+    )
 
     assert result["model"].eq("hybrid_candidate").all()
 
@@ -162,7 +172,11 @@ def test_build_arima_lstm_predictions_rejects_key_misalignment(
         residual.loc[residual.index[0], "split"] = "train"
 
     with pytest.raises(ValueError, match="align|duplicate|validation"):
-        build_arima_lstm_predictions(arima, residual)
+        build_arima_lstm_predictions(
+            arima,
+            residual,
+            validation_end=TEST_VALIDATION_END,
+        )
 
 
 @pytest.mark.parametrize("table_name", ["arima", "residual"])
@@ -178,7 +192,11 @@ def test_build_arima_lstm_predictions_rejects_nonvalidation_rows(
     target["split"] = split
 
     with pytest.raises(ValueError, match="validation"):
-        build_arima_lstm_predictions(arima, residual)
+        build_arima_lstm_predictions(
+            arima,
+            residual,
+            validation_end=TEST_VALIDATION_END,
+        )
 
 
 @pytest.mark.parametrize(
@@ -196,7 +214,11 @@ def test_build_arima_lstm_predictions_rejects_component_names(
     target["model"] = model
 
     with pytest.raises(ValueError, match="model"):
-        build_arima_lstm_predictions(arima, residual)
+        build_arima_lstm_predictions(
+            arima,
+            residual,
+            validation_end=TEST_VALIDATION_END,
+        )
 
 
 @pytest.mark.parametrize("table_name", ["arima", "residual"])
@@ -216,7 +238,11 @@ def test_build_arima_lstm_predictions_rejects_invalid_numbers(
     target.loc[target.index[0], column] = invalid_value
 
     with pytest.raises(ValueError, match="numeric|finite"):
-        build_arima_lstm_predictions(arima, residual)
+        build_arima_lstm_predictions(
+            arima,
+            residual,
+            validation_end=TEST_VALIDATION_END,
+        )
 
 
 def test_build_arima_lstm_predictions_accepts_round_trip_tolerance(
@@ -226,7 +252,11 @@ def test_build_arima_lstm_predictions_accepts_round_trip_tolerance(
     arima, residual = (frame.copy(deep=True) for frame in component_predictions)
     residual.loc[residual.index[0], "actual_return"] += 5e-13
 
-    result = build_arima_lstm_predictions(arima, residual)
+    result = build_arima_lstm_predictions(
+        arima,
+        residual,
+        validation_end=TEST_VALIDATION_END,
+    )
 
     assert len(result) == len(arima)
 
@@ -239,7 +269,11 @@ def test_build_arima_lstm_predictions_rejects_residual_identity_mismatch(
     residual.loc[residual.index[0], "actual_return"] += 2e-12
 
     with pytest.raises(ValueError, match="residual identity"):
-        build_arima_lstm_predictions(arima, residual)
+        build_arima_lstm_predictions(
+            arima,
+            residual,
+            validation_end=TEST_VALIDATION_END,
+        )
 
 
 @pytest.mark.parametrize("model_name", ["", "   ", 1])
@@ -255,6 +289,7 @@ def test_build_arima_lstm_predictions_rejects_invalid_output_name(
             arima,
             residual,
             model_name=cast(str, model_name),
+            validation_end=TEST_VALIDATION_END,
         )
 
 
@@ -276,7 +311,11 @@ def test_build_arima_lstm_predictions_rejects_malformed_tables(
         target[case] = target[case].astype(str)
 
     with pytest.raises(ValueError, match="columns|empty|datetime"):
-        build_arima_lstm_predictions(arima, residual)
+        build_arima_lstm_predictions(
+            arima,
+            residual,
+            validation_end=TEST_VALIDATION_END,
+        )
 
 
 def test_build_arima_lstm_predictions_rejects_nonfinite_sum(
@@ -290,7 +329,62 @@ def test_build_arima_lstm_predictions_rejects_nonfinite_sum(
     residual["predicted_return"] = 1.0e308
 
     with pytest.raises(ValueError, match="finite"):
-        build_arima_lstm_predictions(arima, residual)
+        build_arima_lstm_predictions(
+            arima,
+            residual,
+            validation_end=TEST_VALIDATION_END,
+        )
+
+
+def test_build_arima_lstm_predictions_rejects_targets_after_validation(
+    component_predictions: tuple[pd.DataFrame, pd.DataFrame],
+) -> None:
+    """Reject aligned forecasts crossing validation end boundary"""
+    arima, residual = component_predictions
+
+    with pytest.raises(ValueError, match="validation end"):
+        build_arima_lstm_predictions(
+            arima,
+            residual,
+            validation_end=pd.Timestamp("2020-01-03"),
+        )
+
+
+@pytest.mark.parametrize(
+    "validation_end",
+    ["not-a-date", pd.NaT, pd.Timestamp("2020-01-06", tz="UTC")],
+)
+def test_build_arima_lstm_predictions_rejects_invalid_validation_end(
+    component_predictions: tuple[pd.DataFrame, pd.DataFrame],
+    validation_end: object,
+) -> None:
+    """Reject invalid missing and timezone-aware boundaries"""
+    arima, residual = component_predictions
+
+    with pytest.raises(ValueError, match="validation end"):
+        build_arima_lstm_predictions(
+            arima,
+            residual,
+            validation_end=cast(str | pd.Timestamp, validation_end),
+        )
+
+
+@pytest.mark.parametrize("column", ["date", "target_date"])
+def test_build_arima_lstm_predictions_rejects_missing_dates(
+    component_predictions: tuple[pd.DataFrame, pd.DataFrame],
+    column: str,
+) -> None:
+    """Reject aligned missing dates in component keys"""
+    arima, residual = (frame.copy(deep=True) for frame in component_predictions)
+    arima.loc[arima.index[0], column] = pd.NaT
+    residual.loc[residual.index[0], column] = pd.NaT
+
+    with pytest.raises(ValueError, match="missing dates"):
+        build_arima_lstm_predictions(
+            arima,
+            residual,
+            validation_end=pd.Timestamp("2020-01-06"),
+        )
 
 
 def raw_validation_tables() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -375,7 +469,11 @@ def test_arima_lstm_predictions_integrate_with_selection_and_metrics() -> None:
         selected_model=RESIDUAL_MODEL_NAME,
     )
 
-    hybrid = build_arima_lstm_predictions(arima, selection.predictions)
+    hybrid = build_arima_lstm_predictions(
+        arima,
+        selection.predictions,
+        validation_end=TEST_VALIDATION_END,
+    )
     combined = pd.concat([naive, arima, ordinary_lstm, hybrid], ignore_index=True)
     expected_keys = (
         naive.loc[:, ALIGNMENT_COLUMNS].sort_values(ALIGNMENT_COLUMNS).reset_index(drop=True)

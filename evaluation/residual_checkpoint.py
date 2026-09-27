@@ -372,16 +372,30 @@ def load_residual_predictions(
     return dict(loaded)
 
 
-def _eligible_count(dataset: pd.DataFrame, ticker: str, warmup: int) -> int:
-    """Count evaluation targets meeting the history boundary."""
+def _eligible_schedule(dataset: pd.DataFrame, ticker: str, warmup: int) -> pd.DataFrame:
+    """Return the exact evaluation keys meeting the history boundary."""
     observations = dataset.loc[
         dataset["ticker"].eq(ticker) & dataset["split"].isin(EVALUATION_SPLITS)
     ].sort_values(["target_date", "date"])
     history_dates = pd.DatetimeIndex(observations["date"].sort_values())
-    return sum(
-        int(history_dates.searchsorted(pd.Timestamp(origin), side="right")) >= warmup
-        for origin in observations["date"]
-    )
+    eligible_positions = [
+        position
+        for position, origin in enumerate(observations["date"])
+        if int(history_dates.searchsorted(pd.Timestamp(origin), side="right")) >= warmup
+    ]
+    return observations.iloc[eligible_positions].loc[:, SOURCE_KEY].reset_index(drop=True)
+
+
+def _validate_cached_schedules(
+    cached: Mapping[str, pd.DataFrame],
+    schedules: Mapping[str, pd.DataFrame],
+) -> None:
+    """Require cached rows to match each complete eligible schedule."""
+    for ticker, predictions in cached.items():
+        actual = list(predictions.loc[:, SOURCE_KEY].itertuples(index=False, name=None))
+        expected = list(schedules[ticker].itertuples(index=False, name=None))
+        if actual != expected:
+            raise ValueError(f"cached predictions for ticker {ticker!r} do not match schedule")
 
 
 def run_arima_residual_backtest(
@@ -408,10 +422,11 @@ def run_arima_residual_backtest(
         validated_warmup,
     )
     cached = load_residual_predictions(checkpoint_dir, fingerprint)
-    eligible_counts = {
-        ticker: _eligible_count(dataset, ticker, validated_warmup) for ticker in validated_orders
+    eligible_schedules = {
+        ticker: _eligible_schedule(dataset, ticker, validated_warmup) for ticker in validated_orders
     }
-    total = sum(eligible_counts.values())
+    _validate_cached_schedules(cached, eligible_schedules)
+    total = sum(len(schedule) for schedule in eligible_schedules.values())
     completed = sum(len(predictions) for predictions in cached.values())
     if progress is not None:
         progress(completed, total, "checkpoint")
