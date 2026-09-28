@@ -156,6 +156,38 @@ scikit-learn и TensorFlow. При загрузке проверяются finge
 Совместимые завершённые части повторно не обучаются. Несовместимый, неполный
 или повреждённый checkpoint отклоняется.
 
+Фактические результаты первого полного запуска и выводы H1–H4 приведены в
+[`final_test_results.md`](final_test_results.md).
+
+## Порядок воспроизведения
+
+Итоговый notebook сохранён с outputs первого полного запуска. Перед отдельным
+воспроизведением обязаны успешно завершиться проверки:
+
+```bash
+poetry check --lock
+poetry run pre-commit run --all-files
+git diff --check
+```
+
+После этого notebook выполняется из корня проекта без ограничения времени:
+
+```bash
+poetry run jupyter execute notebooks/08_final_test_evaluation.ipynb --inplace --timeout=-1
+```
+
+Для ночного запуска на macOS используется команда:
+
+```bash
+caffeinate -i poetry run jupyter execute notebooks/08_final_test_evaluation.ipynb --inplace --timeout=-1
+```
+
+Все локальные результаты записываются в `artifacts/final_test/`, который
+игнорируется Git. Если выполнение прервано, та же команда проверяет fingerprint
+и целостность checkpoint, пропускает совместимые завершённые части и продолжает
+расчёт. Успешные checkpoint нельзя удалять или переносить между изменёнными
+версиями протокола.
+
 ## Критерии завершения
 
 - протокол и fingerprint совпадают с зафиксированными значениями;
