@@ -122,10 +122,10 @@ def _validated_arima_schedule(
     return source, ordered.copy(deep=True)
 
 
-def _build_final_residual_dataset(
+def build_final_residual_dataset(
     dataset: pd.DataFrame,
     arima_predictions: pd.DataFrame,
-    protocol: FinalTestProtocol,
+    protocol: FinalTestProtocol = FINAL_TEST_PROTOCOL,
 ) -> pd.DataFrame:
     """Build a complete consecutive residual dataset across all splits."""
     validated = validate_final_dataset(dataset, protocol)
@@ -167,9 +167,12 @@ def _build_arima_predictions(
     protocol: FinalTestProtocol,
     fitter: ModelFitter,
     progress: FinalProgressCallback | None,
+    ticker: str | None = None,
 ) -> pd.DataFrame:
     """Run one expanding ARIMA fit for every eligible observation."""
     observations = _eligible_arima_observations(dataset, protocol)
+    if ticker is not None:
+        observations = observations.loc[observations["ticker"].eq(ticker)].reset_index(drop=True)
     total = len(observations)
     rows: list[dict[str, object]] = []
     for position in range(total):
@@ -211,6 +214,36 @@ def _build_arima_predictions(
     return pd.DataFrame(rows, columns=PREDICTION_COLUMNS).reset_index(drop=True)
 
 
+def build_final_arima_ticker_predictions(
+    dataset: pd.DataFrame,
+    ticker: str,
+    protocol: FinalTestProtocol = FINAL_TEST_PROTOCOL,
+    model_fitter: ModelFitter | None = None,
+    progress: FinalProgressCallback | None = None,
+) -> pd.DataFrame:
+    """Build one independently checkpointable final ARIMA ticker."""
+    validated = validate_final_dataset(dataset, protocol)
+    specs = {spec.ticker: spec for spec in protocol.ticker_specs}
+    if ticker not in specs:
+        raise ValueError("ticker must belong to the final-test protocol")
+    if model_fitter is not None and not callable(model_fitter):
+        raise ValueError("model_fitter must be callable or None")
+    if progress is not None and not callable(progress):
+        raise ValueError("progress must be callable or None")
+    if model_fitter is None:
+        model_fitter = ARIMAFitter(
+            {ticker: specs[ticker].arima_order},
+            model_name=ARIMA_MODEL_NAME,
+        )
+    return _build_arima_predictions(
+        validated,
+        protocol,
+        model_fitter,
+        progress,
+        ticker,
+    )
+
+
 def build_final_arima_data(
     dataset: pd.DataFrame,
     protocol: FinalTestProtocol = FINAL_TEST_PROTOCOL,
@@ -228,7 +261,7 @@ def build_final_arima_data(
         model_fitter = ARIMAFitter(orders, model_name=ARIMA_MODEL_NAME)
 
     predictions = _build_arima_predictions(validated, protocol, model_fitter, progress)
-    residual_dataset = _build_final_residual_dataset(validated, predictions, protocol)
+    residual_dataset = build_final_residual_dataset(validated, predictions, protocol)
     return FinalARIMAData(
         arima_predictions=predictions.copy(deep=True),
         residual_dataset=residual_dataset,

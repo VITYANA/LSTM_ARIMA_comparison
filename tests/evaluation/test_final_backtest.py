@@ -16,7 +16,9 @@ from evaluation.final_backtest import (
     FinalARIMAData,
     align_final_predictions,
     build_final_arima_data,
+    build_final_arima_ticker_predictions,
     build_final_hybrid_predictions,
+    build_final_residual_dataset,
     build_final_seed_hybrid_predictions,
     build_naive_test_predictions,
 )
@@ -194,6 +196,81 @@ def test_build_final_arima_data_uses_frozen_orders_by_default(
     ]
 
 
+def test_build_final_arima_ticker_predictions_isolates_one_ticker() -> None:
+    """Build one resumable ticker unit with local progress"""
+    fitter = RecordingARIMAFitter()
+    progress: list[tuple[int, int, str]] = []
+
+    result = build_final_arima_ticker_predictions(
+        final_dataset(),
+        "JPM",
+        protocol=short_protocol(),
+        model_fitter=cast(ModelFitter, fitter),
+        progress=lambda completed, total, ticker: progress.append((completed, total, ticker)),
+    )
+
+    assert result["ticker"].eq("JPM").all()
+    assert len(result) == 8
+    assert len(fitter.calls) == 8
+    assert progress == [(position, 8, "JPM") for position in range(1, 9)]
+
+
+def test_build_final_arima_ticker_predictions_uses_ticker_order_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Construct default fitter for only requested ticker"""
+    captured: list[tuple[dict[str, tuple[int, int, int]], str]] = []
+    recording = RecordingARIMAFitter()
+
+    def fake_arima_fitter(
+        orders: dict[str, tuple[int, int, int]],
+        model_name: str = "arima",
+    ) -> ModelFitter:
+        captured.append((dict(orders), model_name))
+        return cast(ModelFitter, recording)
+
+    monkeypatch.setattr(final_backtest_module, "ARIMAFitter", fake_arima_fitter)
+
+    result = build_final_arima_ticker_predictions(
+        final_dataset(),
+        "JPM",
+        protocol=short_protocol(),
+    )
+
+    assert captured == [({"JPM": (0, 0, 1)}, "arima")]
+    assert result["ticker"].eq("JPM").all()
+
+
+@pytest.mark.parametrize("argument", ["model_fitter", "progress"])
+def test_build_final_arima_ticker_predictions_rejects_invalid_callbacks(
+    argument: str,
+) -> None:
+    """Reject noncallable ticker builder callbacks"""
+    kwargs: dict[str, object] = {
+        "protocol": short_protocol(),
+        "model_fitter": RecordingARIMAFitter(),
+    }
+    kwargs[argument] = "invalid"
+
+    with pytest.raises(ValueError, match=argument):
+        build_final_arima_ticker_predictions(
+            final_dataset(),
+            "AAPL",
+            **cast(Any, kwargs),
+        )
+
+
+def test_build_final_arima_ticker_predictions_rejects_unknown_ticker() -> None:
+    """Reject ticker units outside frozen final protocol"""
+    with pytest.raises(ValueError, match="ticker"):
+        build_final_arima_ticker_predictions(
+            final_dataset(),
+            "TSLA",
+            protocol=short_protocol(),
+            model_fitter=cast(ModelFitter, RecordingARIMAFitter()),
+        )
+
+
 def test_build_final_arima_data_builds_consecutive_residuals() -> None:
     """Preserve residual values across both split boundaries"""
     result = build_final_arima_data(
@@ -224,6 +301,13 @@ def test_build_final_arima_data_builds_consecutive_residuals() -> None:
         (predictions["actual_return"] - predictions["predicted_return"]).iloc[1:]
     )
 
+    public_result = build_final_residual_dataset(
+        final_dataset(),
+        result.arima_predictions,
+        short_protocol(),
+    )
+    pd.testing.assert_frame_equal(public_result, result.residual_dataset)
+
 
 @pytest.mark.parametrize("case", ["missing-leading", "missing-interior", "duplicate", "extra"])
 def test_final_residual_builder_rejects_incomplete_arima_schedule(case: str) -> None:
@@ -249,7 +333,7 @@ def test_final_residual_builder_rejects_incomplete_arima_schedule(case: str) -> 
         malformed = pd.concat([predictions, extra], ignore_index=True)
 
     with pytest.raises(ValueError, match="schedule|duplicate"):
-        final_backtest_module._build_final_residual_dataset(dataset, malformed, protocol)
+        build_final_residual_dataset(dataset, malformed, protocol)
 
 
 def test_final_residual_builder_rejects_wrong_actual_and_chronology() -> None:
@@ -265,7 +349,7 @@ def test_final_residual_builder_rejects_wrong_actual_and_chronology() -> None:
     wrong_actual.loc[wrong_actual.index[0], "actual_return"] += 0.1
 
     with pytest.raises(ValueError, match="actual_return"):
-        final_backtest_module._build_final_residual_dataset(dataset, wrong_actual, protocol)
+        build_final_residual_dataset(dataset, wrong_actual, protocol)
 
     changed_dataset = dataset.copy()
     changed_predictions = predictions.copy()
@@ -280,7 +364,7 @@ def test_final_residual_builder_rejects_wrong_actual_and_chronology() -> None:
     changed_predictions.loc[prediction_target, "date"] = pd.Timestamp("2015-12-29")
 
     with pytest.raises(ValueError, match="chronology"):
-        final_backtest_module._build_final_residual_dataset(
+        build_final_residual_dataset(
             changed_dataset,
             changed_predictions,
             protocol,
@@ -327,7 +411,7 @@ def test_final_residual_builder_rejects_malformed_arima_predictions(
         predictions["model"] = "wrong"
 
     with pytest.raises(ValueError, match=message):
-        final_backtest_module._build_final_residual_dataset(dataset, predictions, protocol)
+        build_final_residual_dataset(dataset, predictions, protocol)
 
 
 def test_build_final_arima_data_rejects_insufficient_warmup_history() -> None:
