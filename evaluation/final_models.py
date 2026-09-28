@@ -2,21 +2,39 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
 from analysis.preparation import DEFAULT_SPLIT_CONFIG, SplitConfig
-from evaluation.contracts import OBSERVATION_KEY
+from data.sequences import (
+    SequenceBatch,
+    fit_return_scaler,
+    lag_columns,
+    split_sequence_batch,
+    transform_features,
+    transform_targets,
+)
+from evaluation.contracts import (
+    OBSERVATION_KEY,
+    PREDICTION_COLUMNS,
+    require_finite_numeric,
+    validate_prediction_series,
+)
 from evaluation.loading import REQUIRED_DATASET_COLUMNS
 from models.arima import ARIMAOrder
+from models.interfaces import validate_model_name
 from models.lstm import (
     BATCH_SIZE,
     EARLY_STOPPING_PATIENCE,
     LEARNING_RATE,
     MAX_EPOCHS,
+    MAX_SEED,
+    MIN_SEED,
     LSTMConfig,
+    LSTMTrainer,
 )
 
 ARIMA_WARMUP = 252
@@ -30,6 +48,8 @@ MODEL_COMPARISONS = (
     ("arima_lstm", "lstm"),
 )
 NUMERIC_DATASET_COLUMNS = ("adj_close", "log_return", "target_return")
+FINAL_KEY_COLUMNS = ("date", "target_date", "ticker", "split")
+FINAL_SORT_COLUMNS = ("ticker", "target_date", "date", "split")
 
 
 @dataclass(frozen=True)
@@ -275,3 +295,237 @@ def validate_final_dataset(
         raise ValueError("dataset test interval must include both canonical boundaries")
 
     return validated.sort_values(["ticker", "target_date"], kind="mergesort").reset_index(drop=True)
+
+
+@dataclass(frozen=True)
+class FinalSeedResult:
+    """Contain one successful fixed-model final seed run."""
+
+    ticker: str
+    config: LSTMConfig
+    seed: int
+    model: str
+    best_epoch: int
+    parameter_count: int
+    predictions: pd.DataFrame
+
+
+def _selected_ticker_spec(ticker: object) -> FinalTickerSpec:
+    """Return the frozen specification for one core ticker."""
+    for spec in FINAL_TEST_PROTOCOL.ticker_specs:
+        if spec.ticker == ticker:
+            return spec
+    raise ValueError("ticker must belong to the final-test protocol")
+
+
+def _validated_final_identity(
+    ticker: object,
+    config: object,
+    seed: object,
+    model_name: object,
+) -> tuple[str, LSTMConfig, int, str]:
+    """Validate one final LSTM run identity."""
+    spec = _selected_ticker_spec(ticker)
+    if not isinstance(config, LSTMConfig) or config not in (
+        spec.lstm_config,
+        spec.residual_config,
+    ):
+        raise ValueError("config must match a frozen ticker configuration")
+    if type(seed) is not int or not MIN_SEED <= seed <= MAX_SEED:
+        raise ValueError(f"seed must be an integer from {MIN_SEED} through {MAX_SEED}")
+    return spec.ticker, config, seed, validate_model_name(model_name)
+
+
+def _build_final_sequences(
+    dataset: pd.DataFrame,
+    ticker: str,
+    window: int,
+    splits: frozenset[str],
+) -> SequenceBatch:
+    """Build complete chronological sequences for selected final splits."""
+    rows = dataset.loc[dataset["ticker"].eq(ticker)].sort_values(
+        ["date", "target_date"],
+        kind="mergesort",
+    )
+    columns = lag_columns(window)
+    features = pd.DataFrame(
+        {
+            column: rows["log_return"].shift(lag)
+            for column, lag in zip(columns, range(window - 1, -1, -1), strict=True)
+        },
+        index=rows.index,
+    )
+    selected = rows["split"].isin(splits) & features.notna().all(axis=1)
+    if not selected.any():
+        raise ValueError("insufficient history for final LSTM sequences")
+    targets = rows.loc[selected, "target_return"].astype("float64").copy()
+    targets.name = "target_return"
+    return SequenceBatch(
+        features=features.loc[selected].astype("float64"),
+        targets=targets,
+        keys=rows.loc[selected, FINAL_KEY_COLUMNS].copy(),
+    )
+
+
+def _seed_model_name(model_name: str, seed: int) -> str:
+    """Return a stable final seed model identifier."""
+    return f"{model_name}_seed_{seed:02d}"
+
+
+def run_final_lstm_seed(
+    dataset: pd.DataFrame,
+    ticker: str,
+    config: LSTMConfig,
+    seed: int,
+    trainer: LSTMTrainer,
+    model_name: str,
+) -> FinalSeedResult:
+    """Train one fixed LSTM seed and forecast the complete final test."""
+    validated_ticker, validated_config, validated_seed, base_name = _validated_final_identity(
+        ticker,
+        config,
+        seed,
+        model_name,
+    )
+    validated = validate_final_dataset(dataset)
+    training_splits = frozenset({"train", "validation"})
+    training_batch = _build_final_sequences(
+        validated,
+        validated_ticker,
+        validated_config.window,
+        training_splits,
+    )
+    test_batch = _build_final_sequences(
+        validated,
+        validated_ticker,
+        validated_config.window,
+        frozenset({"test"}),
+    )
+    inner_train, inner_validation = split_sequence_batch(
+        training_batch,
+        FINAL_TEST_PROTOCOL.training.inner_train_fraction,
+    )
+    training_data = validated.loc[validated["split"].isin(training_splits)].copy()
+
+    inner_cutoff = pd.Timestamp(inner_train.keys["date"].max())
+    inner_scaler = fit_return_scaler(training_data, validated_ticker, inner_cutoff)
+    best_epoch = trainer.determine_best_epoch(
+        validated_config,
+        validated_seed,
+        transform_features(inner_train.features, inner_scaler),
+        transform_targets(inner_train.targets, inner_scaler),
+        transform_features(inner_validation.features, inner_scaler),
+        transform_targets(inner_validation.targets, inner_scaler),
+    )
+    if type(best_epoch) is not int or not 1 <= best_epoch <= MAX_EPOCHS:
+        raise ValueError(f"best epoch must be an integer from 1 through {MAX_EPOCHS}")
+
+    full_cutoff = pd.Timestamp(training_batch.keys["date"].max())
+    full_scaler = fit_return_scaler(training_data, validated_ticker, full_cutoff)
+    seed_name = _seed_model_name(base_name, validated_seed)
+    model = trainer.fit(
+        validated_config,
+        validated_seed,
+        transform_features(training_batch.features, full_scaler),
+        transform_targets(training_batch.targets, full_scaler),
+        full_scaler,
+        lag_columns(validated_config.window),
+        best_epoch,
+        seed_name,
+    )
+    if model.name != seed_name or model.config != validated_config:
+        raise ValueError("fitted model identity must match the requested final seed")
+    if type(model.parameter_count) is not int or model.parameter_count <= 0:
+        raise ValueError("parameter_count must be a positive integer")
+
+    predicted = validate_prediction_series(model.predict(test_batch.features), test_batch.features)
+    predictions = test_batch.keys.copy()
+    predictions["model"] = seed_name
+    predictions["actual_return"] = test_batch.targets
+    predictions["predicted_return"] = predicted
+    predictions = predictions.loc[:, PREDICTION_COLUMNS].reset_index(drop=True)
+    require_finite_numeric(predictions["actual_return"], "actual_return")
+    require_finite_numeric(predictions["predicted_return"], "predicted_return")
+    return FinalSeedResult(
+        ticker=validated_ticker,
+        config=validated_config,
+        seed=validated_seed,
+        model=seed_name,
+        best_epoch=best_epoch,
+        parameter_count=model.parameter_count,
+        predictions=predictions,
+    )
+
+
+def _validated_seed_predictions(
+    result: FinalSeedResult,
+    base_name: str,
+) -> pd.DataFrame:
+    """Return one isolated canonical seed prediction table."""
+    expected_name = _seed_model_name(base_name, result.seed)
+    if result.model != expected_name:
+        raise ValueError("seed result model name does not match its seed")
+    predictions = result.predictions
+    if predictions.columns.tolist() != list(PREDICTION_COLUMNS):
+        raise ValueError("seed predictions must use standard columns in standard order")
+    if predictions.empty:
+        raise ValueError("seed predictions must not be empty")
+    for column in ("date", "target_date"):
+        if not pd.api.types.is_datetime64_any_dtype(predictions[column]):
+            raise ValueError(f"seed prediction {column} must be datetime")
+        if predictions[column].isna().any():
+            raise ValueError("seed predictions must contain finite dates")
+    if not predictions["ticker"].eq(result.ticker).all():
+        raise ValueError("seed prediction ticker must match its result")
+    if not predictions["split"].eq("test").all():
+        raise ValueError("seed predictions must contain test rows only")
+    if not predictions["model"].eq(result.model).all():
+        raise ValueError("seed prediction model must match its result")
+    if predictions.duplicated(list(FINAL_KEY_COLUMNS)).any():
+        raise ValueError("seed predictions contain duplicate observation keys")
+    require_finite_numeric(predictions["actual_return"], "seed actual_return")
+    require_finite_numeric(predictions["predicted_return"], "seed predicted_return")
+    return (
+        predictions.loc[:, PREDICTION_COLUMNS]
+        .sort_values(list(FINAL_SORT_COLUMNS), kind="mergesort")
+        .reset_index(drop=True)
+        .copy(deep=True)
+    )
+
+
+def average_final_seed_predictions(
+    results: Sequence[FinalSeedResult],
+    model_name: str,
+) -> pd.DataFrame:
+    """Average exactly ten aligned final seed forecasts."""
+    base_name = validate_model_name(model_name)
+    values = tuple(results)
+    if not all(isinstance(result, FinalSeedResult) for result in values):
+        raise ValueError("results must contain FinalSeedResult values")
+    if len(values) != len(FINAL_TEST_PROTOCOL.seeds) or {result.seed for result in values} != set(
+        FINAL_TEST_PROTOCOL.seeds
+    ):
+        raise ValueError("results must contain exactly seeds 0 through 9")
+    if len({result.ticker for result in values}) != 1:
+        raise ValueError("seed results must share one ticker")
+    if len({result.config for result in values}) != 1:
+        raise ValueError("seed results must share one config")
+
+    ordered = tuple(sorted(values, key=lambda result: result.seed))
+    tables = tuple(_validated_seed_predictions(result, base_name) for result in ordered)
+    expected_keys = tables[0].loc[:, FINAL_KEY_COLUMNS]
+    expected_actual = tables[0]["actual_return"]
+    for table in tables[1:]:
+        if not table.loc[:, FINAL_KEY_COLUMNS].equals(expected_keys):
+            raise ValueError("seed prediction keys do not align")
+        if not table["actual_return"].equals(expected_actual):
+            raise ValueError("seed actual returns do not align")
+
+    prediction_values = np.column_stack(
+        [table["predicted_return"].to_numpy(dtype="float64") for table in tables]
+    )
+    averaged = tables[0].loc[:, FINAL_KEY_COLUMNS].copy()
+    averaged["model"] = base_name
+    averaged["actual_return"] = expected_actual.to_numpy(dtype="float64")
+    averaged["predicted_return"] = prediction_values.mean(axis=1)
+    return averaged.loc[:, PREDICTION_COLUMNS].reset_index(drop=True)
